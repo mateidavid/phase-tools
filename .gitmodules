@@ -1,3 +1,6 @@
 [submodule "src/htslib"]
 	path = src/htslib
 	url = https://github.com/samtools/htslib.git
+[submodule "src/tclap"]
+	path = src/tclap
+	url = https://github.com/mateidavid/tclap.git
