@@ -1,6 +1,10 @@
 #include <iostream>
+#include <sstream>
 #include <cstdlib>
 #include <time.h>
+#include <string>
+#include <set>
+#include <vector>
 
 #include <htslib/faidx.h>
 #include <htslib/vcf.h>
@@ -28,6 +32,11 @@ public:
     int rf_len;
     int gt[2];
     bool is_phased;
+
+    friend bool operator < (const Het_Variation& lhs, const Het_Variation& rhs)
+    {
+        return lhs.rf_start < rhs.rf_start;
+    }
 
     friend ostream& operator << (ostream& os, const Het_Variation& v)
     {
@@ -75,7 +84,14 @@ namespace global
     // phased chromosomes
     map< string, int > chr_phase_m;
     // variations
-    map< string, list< Het_Variation > > var_m;
+    map< string, set< Het_Variation > > var_m;
+    // mappings
+    htsFile * map_file_p;
+    bam_hdr_t * map_hdr_p;
+    string crt_chr;
+    htsFile * crt_out_map_file_p[2];
+    // mate pair decision
+    map< string, int > mp_dec_m;
 } // namespace global
 
 void set_chr_phase_m()
@@ -184,8 +200,13 @@ void load_variations()
             v.gt[i] = bcf_gt_allele(dat[i]);
         }
         v.is_phased = bcf_gt_is_phased(dat[1]);
-        LOG("main", debug) << chr_name << "\t" << v;
-        global::var_m[chr_name].push_back(move(v));
+        LOG("variations", debug) << chr_name << "\t" << v;
+        auto res = global::var_m[chr_name].insert(move(v));
+        if (not res.second)
+        {
+            cerr << "duplicate variation:\n" << chr_name << "\t" << v;
+            exit(EXIT_FAILURE);
+        }
     }
     // destroy structures and close file
     if (dat) free(dat);
@@ -212,62 +233,116 @@ void print_variations(ostream& os)
     }
 }
 
-void process_mappings()
+int get_phase(int rf_start, int rf_len, const string& cigar_string, const DNA_Sequence& seq, const Het_Variation& v)
 {
-    auto map_file_p = hts_open(global::map_fn.get().c_str(), "r");
-    auto map_hdr_p = sam_hdr_read(map_file_p);
-    auto rec_p = bam_init1();
-    while (sam_read1(map_file_p, map_hdr_p, rec_p) >= 0)
+    // for now, only deal with SNPs
+    if (v.allele_seq_v[0].size() != 1 or v.allele_seq_v[v.gt[0]].size() != 1 or v.allele_seq_v[v.gt[1]].size() != 1)
     {
-        string query_name = bam_get_qname(rec_p);
-        bool is_paired = rec_p->core.flag & BAM_FPAIRED;
-        bool is_primary = not (rec_p->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY));
-        string chr_name = map_hdr_p->target_name[rec_p->core.tid];
-        int rf_start = rec_p->core.pos;
-        auto cigar_ptr = bam_get_cigar(rec_p);
-        string cigar_string;
-        for (int i = 0; i < rec_p->core.n_cigar; ++i)
+        return -1;
+    }
+    //TODO
+    return -1;
+}
+
+void process_mapping(const bam1_t * rec_p)
+{
+    string query_name = bam_get_qname(rec_p);
+    bool is_paired = rec_p->core.flag & BAM_FPAIRED;
+    bool is_mapped = not (rec_p->core.flag & BAM_FUNMAP);
+    bool is_mp_mapped = not (rec_p->core.flag & BAM_FMUNMAP);
+    bool is_primary = not (rec_p->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY));
+    string chr_name = global::map_hdr_p->target_name[rec_p->core.tid];
+    int rf_start = rec_p->core.pos;
+    auto cigar_ptr = bam_get_cigar(rec_p);
+    string cigar_string;
+    for (int i = 0; i < rec_p->core.n_cigar; ++i)
+    {
+        ostringstream oss;
+        oss << bam_cigar_oplen(cigar_ptr[i]);
+        cigar_string += oss.str() + bam_cigar_opchr(cigar_ptr[i]);
+    }
+    int rf_len = bam_cigar2rlen(rec_p->core.n_cigar, cigar_ptr);
+    auto seq_ptr = bam_get_seq(rec_p);
+    DNA_Sequence seq;
+    for (int i = 0; i < rec_p->core.l_qseq; ++i)
+    {
+        seq += seq_nt16_str[bam_seqi(seq_ptr, i)];
+    }
+    bool mp_seen = global::mp_dec_m.count(query_name) > 0;
+    int mp_decision = -1;
+    if (mp_seen)
+    {
+        mp_decision = global::mp_dec_m.at(query_name);
+    }
+
+    LOG("mappings", debug)
+        << query_name << "\t"
+        << (is_paired? "paired" : "unpaired") << "\t"
+        << (is_mapped? "mapped" : "unmapped") << "\t"
+        << (is_mp_mapped? "mp_mapped" : "mp_unmapped") << "\t"
+        << (is_primary? "primary" : "non-primary") << "\t"
+        << (mp_seen? "second" : "first") << "\t"
+        << mp_decision << "\t"
+        << chr_name << "\t"
+        << rf_start << "\t"
+        << rf_len << "\t"
+        << cigar_string << "\t"
+        << seq << endl;
+
+    // compute range of variations spanned by this mapping
+    int decision = -2; // unmapped
+    if (is_mapped)
+    {
+        decision = -1; // not spanning any hets
+        if (global::var_m.count(chr_name) > 0)
         {
-            ostringstream oss;
-            oss << bam_cigar_oplen(cigar_ptr[i]);
-            cigar_string += oss.str() + bam_cigar_opchr(cigar_ptr[i]);
-        }
-        auto seq_ptr = bam_get_seq(rec_p);
-        DNA_Sequence seq;
-        for (int i = 0; i < rec_p->core.l_qseq; ++i)
-        {
-            switch (bam_seqi(seq_ptr, i))
+            Het_Variation search_key;
+            search_key.rf_start = rf_start;
+            auto it_start = global::var_m.at(chr_name).lower_bound(search_key);
+            search_key.rf_start = rf_start + rf_len;
+            auto it_end = global::var_m.at(chr_name).lower_bound(search_key);
+            if (it_start != it_end)
             {
-            case 1:
-                seq += 'A';
-                break;
-            case 2:
-                seq += 'C';
-                break;
-            case 4:
-                seq += 'G';
-                break;
-            case 8:
-                seq += 'T';
-                break;
-            default:
-                seq += 'N';
-                break;
+                // mapping spans at least one het
+                // for now: compute phasing using only first phased het
+                auto it = it_start;
+                for (; it != it_end and not it->is_phased; ++it);
+                if (it != it_end)
+                {
+                    int phase = get_phase(rf_start, rf_len, cigar_string, seq, *it);
+                    if (phase != -1)
+                    {
+                        decision = phase;
+                    }
+                }
             }
         }
+    }
 
-        clog << query_name << "\t"
-             << (is_paired? "paired" : "unpaired") << "\t"
-             << (is_primary? "primary" : "non-primary") << "\t"
-             << chr_name << "\t"
-             << rf_start << "\t"
-             << cigar_string << "\t"
-             << seq << endl;
+    if (not mp_seen)
+    {
+        global::mp_dec_m[query_name] = decision;
+    }
+    else
+    {
+        global::mp_dec_m.erase(query_name);
+    }
+}
 
+void process_mappings()
+{
+    global::map_file_p = hts_open(global::map_fn.get().c_str(), "r");
+    global::map_hdr_p = sam_hdr_read(global::map_file_p);
+
+    auto rec_p = bam_init1();
+    while (sam_read1(global::map_file_p, global::map_hdr_p, rec_p) >= 0)
+    {
+        process_mapping(rec_p);
     }
     bam_destroy1(rec_p);
-    bam_hdr_destroy(map_hdr_p);
-    hts_close(map_file_p);
+
+    bam_hdr_destroy(global::map_hdr_p);
+    hts_close(global::map_file_p);
 }
 
 void real_main()
