@@ -20,6 +20,7 @@ public:
     int rf_start;
     int rf_len;
     int gt[2];
+    bool is_phased;
 }; // class Variation
 
 
@@ -100,7 +101,7 @@ void load_variations()
         if (n_gt != 2
             or bcf_gt_is_missing(dat[0])
             or bcf_gt_is_missing(dat[1])
-            or not bcf_gt_is_phased(dat[1])
+            //or not bcf_gt_is_phased(dat[1])
             or bcf_gt_allele(dat[0]) == bcf_gt_allele(dat[1]))
         {
             continue;
@@ -114,6 +115,7 @@ void load_variations()
         {
             v.gt[i] = bcf_gt_allele(dat[i]);
         }
+        v.is_phased = bcf_gt_is_phased(dat[1]);
         global::var_map[chr_name].push_back(move(v));
     }
     // destroy structures and close file
@@ -141,7 +143,7 @@ void real_main()
             {
                 clog << v.seq_v[i] << ((i > 0 and i < v.seq_v.size()-1)? "," : "\t");
             }
-            clog << v.gt[0] << "|" << v.gt[1] << endl;
+            clog << v.gt[0] << (v.isphased? "|" : "/") << v.gt[1] << endl;
         }
     }
 }
