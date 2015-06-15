@@ -2,7 +2,9 @@
 #include <cstdlib>
 #include <time.h>
 
+#include <htslib/faidx.h>
 #include <htslib/vcf.h>
+#include <htslib/sam.h>
 #include <tclap/CmdLine.h>
 #include "version.h"
 
@@ -15,16 +17,30 @@
 
 using namespace std;
 
+typedef rc_sequence::Sequence< string > DNA_Sequence;
+
 class Het_Variation
 {
 public:
-    vector< rc_sequence::Sequence< string > > seq_v;
+    DNA_Sequence flank_seq[2];
+    vector< DNA_Sequence > allele_seq_v;
     int rf_start;
     int rf_len;
     int gt[2];
     bool is_phased;
-}; // class Variation
 
+    friend ostream& operator << (ostream& os, const Het_Variation& v)
+    {
+        os << v.rf_start + 1 << "\t";
+        for (size_t i = 0; i < v.allele_seq_v.size(); ++i)
+        {
+            os << v.allele_seq_v[i] << ((i > 0 and i < v.allele_seq_v.size()-1)? "," : "\t");
+        }
+        os << v.gt[0] << (v.is_phased? "|" : "/") << v.gt[1] << "\t"
+           << v.flank_seq[0] << "\t" << v.flank_seq[1] << endl;
+        return os;
+    }
+}; // class Variation
 
 namespace global
 {
@@ -44,18 +60,53 @@ namespace global
     //
     // io-related parameters
     //
-    ValueArg< string > vcf_fn("", "vcf", "VCF file.", true, "", "file", cmd_parser);
-    ValueArg< string > bam_fn("", "bam", "BAM file.", true, "", "file", cmd_parser);
+    ValueArg< string > ref_fn("", "ref", "Reference (Fasta) file.", true, "", "file", cmd_parser);
+    ValueArg< string > var_fn("", "var", "Variants (VCF) file.", true, "", "file", cmd_parser);
+    ValueArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
+    //
+    // other parameters
+    //
+    MultiArg< string > chr_phase("", "chr-phase", "Assign all mappings to this chr to given phase.", false, "chr:[01]", cmd_parser);
+    ValueArg< int > flank_len("", "flank_len", "Flank length [10].", false, 10, "int", cmd_parser);
 
-    map< string, list< Het_Variation > > var_map;
+    // reference
+    faidx_t * faidx_p;
+    // phased chromosomes
+    map< string, int > chr_phase_m;
+    // variations
+    map< string, list< Het_Variation > > var_m;
 } // namespace global
+
+void set_chr_phase_m()
+{
+    for (const auto & s : global::chr_phase.get())
+    {
+        size_t i = s.find(':');
+        if (i != s.size() - 2 or (s[s.size() - 1] != '0' and (s[s.size() - 1] != '1')))
+        {
+            cerr << "error parsing phased chromosome [" << s << "]: format should be <chr:[01]>" << endl;
+            abort();
+        }
+        int phase = s[s.size() - 1] - '0';
+        LOG("main", info) << "chromosome [" << s.substr(0, i) << "] set to phase [" << phase << "]" << endl;
+        global::chr_phase_m[s.substr(0, i)] = phase;
+    }
+}
+
+void load_reference_index()
+{
+    LOG("main", info) << "load_reference_index(): start" << endl;
+    global::faidx_p = fai_load(global::ref_fn.get().c_str());
+    LOG("main", info) << "load_reference_index(): end" << endl;
+}
 
 void load_variations()
 {
+    LOG("main", info) << "load_variations(): start" << endl;
     int ret;
     // open vcf file, initialize structs
-    auto f_p = bcf_open(global::vcf_fn.get().c_str(), "r");
+    auto f_p = bcf_open(global::var_fn.get().c_str(), "r");
     auto hdr_p = bcf_hdr_read(f_p);
     auto rec_p = bcf_init1();
     int * dat = nullptr;// = new int [bcf_hdr_nsamples(hdr_p)*2];
@@ -100,7 +151,8 @@ void load_variations()
         clog << endl;
         */
 
-        if (n_gt != 2
+        if (global::chr_phase_m.count(chr_name) > 0
+            or n_gt != 2
             or bcf_gt_is_missing(dat[0])
             or bcf_gt_is_missing(dat[1])
             //or not bcf_gt_is_phased(dat[1])
@@ -109,16 +161,31 @@ void load_variations()
             continue;
         }
 
+        {
+            char * seq;
+            int seq_size;
+            seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
+                                  v.rf_start - global::flank_len, v.rf_start - 1,
+                                  &seq_size);
+            v.flank_seq[0] = seq;
+            free(seq);
+            seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
+                                  v.rf_start + v.rf_len, v.rf_start + v.rf_len + global::flank_len - 1,
+                                  &seq_size);
+            v.flank_seq[1] = seq;
+            free(seq);
+        }
         for (int i = 0; i < rec_p->n_allele; ++i)
         {
-            v.seq_v.emplace_back(rec_p->d.allele[i]);
+            v.allele_seq_v.emplace_back(rec_p->d.allele[i]);
         }
         for (int i = 0; i < 2; ++i)
         {
             v.gt[i] = bcf_gt_allele(dat[i]);
         }
         v.is_phased = bcf_gt_is_phased(dat[1]);
-        global::var_map[chr_name].push_back(move(v));
+        LOG("main", debug) << chr_name << "\t" << v;
+        global::var_m[chr_name].push_back(move(v));
     }
     // destroy structures and close file
     if (dat) free(dat);
@@ -131,23 +198,89 @@ void load_variations()
         cerr << "bcf_close() error: status=" << ret << endl;
         exit(ret);
     }
+    LOG("main", info) << "load_variations(): end" << endl;
+}
+
+void print_variations(ostream& os)
+{
+    for (const auto & p : global::var_m)
+    {
+        for (const auto & v : p.second)
+        {
+            os << v;
+        }
+    }
+}
+
+void process_mappings()
+{
+    auto map_file_p = hts_open(global::map_fn.get().c_str(), "r");
+    auto map_hdr_p = sam_hdr_read(map_file_p);
+    auto rec_p = bam_init1();
+    while (sam_read1(map_file_p, map_hdr_p, rec_p) >= 0)
+    {
+        string query_name = bam_get_qname(rec_p);
+        bool is_paired = rec_p->core.flag & BAM_FPAIRED;
+        bool is_primary = not (rec_p->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY));
+        string chr_name = map_hdr_p->target_name[rec_p->core.tid];
+        int rf_start = rec_p->core.pos;
+        auto cigar_ptr = bam_get_cigar(rec_p);
+        string cigar_string;
+        for (int i = 0; i < rec_p->core.n_cigar; ++i)
+        {
+            ostringstream oss;
+            oss << bam_cigar_oplen(cigar_ptr[i]);
+            cigar_string += oss.str() + bam_cigar_opchr(cigar_ptr[i]);
+        }
+        auto seq_ptr = bam_get_seq(rec_p);
+        DNA_Sequence seq;
+        for (int i = 0; i < rec_p->core.l_qseq; ++i)
+        {
+            switch (bam_seqi(seq_ptr, i))
+            {
+            case 1:
+                seq += 'A';
+                break;
+            case 2:
+                seq += 'C';
+                break;
+            case 4:
+                seq += 'G';
+                break;
+            case 8:
+                seq += 'T';
+                break;
+            default:
+                seq += 'N';
+                break;
+            }
+        }
+
+        clog << query_name << "\t"
+             << (is_paired? "paired" : "unpaired") << "\t"
+             << (is_primary? "primary" : "non-primary") << "\t"
+             << chr_name << "\t"
+             << rf_start << "\t"
+             << cigar_string << "\t"
+             << seq << endl;
+
+    }
+    bam_destroy1(rec_p);
+    bam_hdr_destroy(map_hdr_p);
+    hts_close(map_file_p);
 }
 
 void real_main()
 {
+    set_chr_phase_m();
+    load_reference_index();
     load_variations();
-    for (const auto & p : global::var_map)
-    {
-        for (const auto & v : p.second)
-        {
-            clog << p.first << "\t" << v.rf_start + 1 << "\t";
-            for (size_t i = 0; i < v.seq_v.size(); ++i)
-            {
-                clog << v.seq_v[i] << ((i > 0 and i < v.seq_v.size()-1)? "," : "\t");
-            }
-            clog << v.gt[0] << (v.is_phased? "|" : "/") << v.gt[1] << endl;
-        }
-    }
+    //print_variations(clog);
+
+    process_mappings();
+
+    // cleanup
+    fai_destroy(global::faidx_p);
 }
 
 int main(int argc, char * argv[])
