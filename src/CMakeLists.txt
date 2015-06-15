@@ -47,18 +47,16 @@ find_package(ZLIB REQUIRED)
 # check for HTSlib
 # => HTSlib_INCLUDE_DIR, HTSlib_LIBRARY
 if(BUILD_HTSLIB)
-    message(STATUS "Building HTSlib in: ${OPTIONAL_SUBMODULE_PREFIX}")
+    message(STATUS "Building HTSlib in: ${PROJECT_SOURCE_DIR}/htslib")
     ExternalProject_Add(HTSlib
-        GIT_REPOSITORY https://github.com/samtools/htslib.git
-        GIT_TAG 1.2.1
-        PREFIX ${OPTIONAL_SUBMODULE_PREFIX}
+        SOURCE_DIR ${PROJECT_SOURCE_DIR}/htslib
         CONFIGURE_COMMAND ""
         BUILD_IN_SOURCE 1
         BUILD_COMMAND make lib-static
         INSTALL_COMMAND ""
         )
-    set(HTSlib_INCLUDE_DIR ${OPTIONAL_SUBMODULE_PREFIX}/src/HTSlib)
-    set(HTSlib_LIBRARY ${OPTIONAL_SUBMODULE_PREFIX}/src/HTSlib/${CMAKE_STATIC_LIBRARY_PREFIX}hts${CMAKE_STATIC_LIBRARY_SUFFIX})
+    set(HTSlib_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/htslib)
+    set(HTSlib_LIBRARY ${PROJECT_SOURCE_DIR}/htslib/${CMAKE_STATIC_LIBRARY_PREFIX}hts${CMAKE_STATIC_LIBRARY_SUFFIX})
 else()
     find_package(HTSlib REQUIRED)
 endif()
@@ -147,7 +145,7 @@ message(STATUS "CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
 ### Add target that updates version
 #
 add_custom_target(version ALL
-    ${CMAKE_COMMAND} -DSRC_ROOT=${PROJECT_SOURCE_DIR} -DBIN_ROOT=${PROJECT_BINARY_DIR} -P ${PROJECT_SOURCE_DIR}/version.cmake)
+    ${CMAKE_COMMAND} -DSRC_ROOT=${PROJECT_SOURCE_DIR} -DBIN_ROOT=${PROJECT_BINARY_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/update-version.cmake)
 
 ### Enable testing targets
 #
@@ -164,5 +162,6 @@ target_link_libraries(bam-phase-split
     ${HTSlib_LIBRARY}
     ${ZLIB_LIBRARIES}
 )
+add_dependencies(bam-phase-split version)
 
 file(COPY add-parent-phasing DESTINATION .)
