@@ -4,6 +4,8 @@
 
 #include <htslib/vcf.h>
 #include <tclap/CmdLine.h>
+#include "version.h"
+
 #include "logger.hpp"
 #include "RC_Sequence.hpp"
 
@@ -143,7 +145,7 @@ void real_main()
             {
                 clog << v.seq_v[i] << ((i > 0 and i < v.seq_v.size()-1)? "," : "\t");
             }
-            clog << v.gt[0] << (v.isphased? "|" : "/") << v.gt[1] << endl;
+            clog << v.gt[0] << (v.is_phased? "|" : "/") << v.gt[1] << endl;
         }
     }
 }
