@@ -14,6 +14,7 @@
 
 #include "logger.hpp"
 #include "RC_Sequence.hpp"
+#include "Cigar.hpp"
 
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION "missing_version"
@@ -32,6 +33,8 @@ public:
     int rf_len;
     int gt[2];
     bool is_phased;
+    bool is_snp; // true iff all of (potentially 3) alleles: ref, gt[0], gt[1] are length 1
+    unsigned long fragment_count[2];
 
     friend bool operator < (const Het_Variation& lhs, const Het_Variation& rhs)
     {
@@ -46,7 +49,8 @@ public:
             os << v.allele_seq_v[i] << ((i > 0 and i < v.allele_seq_v.size()-1)? "," : "\t");
         }
         os << v.gt[0] << (v.is_phased? "|" : "/") << v.gt[1] << "\t"
-           << v.flank_seq[0] << "\t" << v.flank_seq[1] << endl;
+           << v.flank_seq[0] << "\t" << v.flank_seq[1] << "\t"
+           << (v.is_snp? "snp" : "indel") << endl;
         return os;
     }
 }; // class Variation
@@ -72,6 +76,7 @@ namespace global
     ValueArg< string > ref_fn("", "ref", "Reference (Fasta) file.", true, "", "file", cmd_parser);
     ValueArg< string > var_fn("", "var", "Variants (VCF) file.", true, "", "file", cmd_parser);
     ValueArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "", "file", cmd_parser);
+    ValueArg< string > out_map_fn("", "out", "Output file prefix. Files names will be <prefix>.<chr>.[01].bam", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
     //
     // other parameters
@@ -85,13 +90,26 @@ namespace global
     map< string, int > chr_phase_m;
     // variations
     map< string, set< Het_Variation > > var_m;
-    // mappings
+    // input mappings
     htsFile * map_file_p;
     bam_hdr_t * map_hdr_p;
+    // output mappings
     string crt_chr;
     htsFile * crt_out_map_file_p[2];
     // mate pair decision
-    map< string, int > mp_dec_m;
+    map< string, pair< bam1_t *, int > > mp_store_m;
+
+    // counts
+    size_t num_frag_random_decision;
+    size_t num_frag_inconclusive_decision;
+    size_t num_frag_single_decision;
+    size_t num_frag_concordant_decision;
+    size_t num_frag_conflicting_decision;
+    size_t num_frag_unmapped;
+    size_t num_frag_diff_chr;
+    size_t num_map_nonprimary;
+    size_t num_map_output;
+    size_t num_map_inconclusive_phasing;
 } // namespace global
 
 void set_chr_phase_m()
@@ -200,6 +218,15 @@ void load_variations()
             v.gt[i] = bcf_gt_allele(dat[i]);
         }
         v.is_phased = bcf_gt_is_phased(dat[1]);
+        v.is_snp = (v.allele_seq_v[0].size() == 1
+                    and v.allele_seq_v[v.gt[0]].size() == 1
+                    and v.allele_seq_v[v.gt[1]].size() == 1);
+        if (not v.is_phased)
+        {
+            // assign a random phase
+            int flip_phase = lrand48() % 2;
+            if (flip_phase) swap(v.gt[0], v.gt[1]);
+        }
         LOG("variations", debug) << chr_name << "\t" << v;
         auto res = global::var_m[chr_name].insert(move(v));
         if (not res.second)
@@ -233,18 +260,122 @@ void print_variations(ostream& os)
     }
 }
 
-int get_phase(int rf_start, int rf_len, const string& cigar_string, const DNA_Sequence& seq, const Het_Variation& v)
+int get_phase_snp(int rf_start, int rf_len, const Cigar& cigar, const DNA_Sequence& seq, const Het_Variation& v)
 {
-    // for now, only deal with SNPs
-    if (v.allele_seq_v[0].size() != 1 or v.allele_seq_v[v.gt[0]].size() != 1 or v.allele_seq_v[v.gt[1]].size() != 1)
+    assert(rf_start <= v.rf_start and v.rf_start + v.rf_len <= rf_start + rf_len);
+    // compute the mapped range, on query, of the single reference position
+    auto rg = cigar.mapped_range(make_pair(v.rf_start - rf_start, v.rf_start - rf_start + 1), true);
+    if (rg.second != rg.first + 1)
     {
+        // the changed reference base is mapped to something other than a match; we give up
         return -1;
     }
-    //TODO
+    else
+    {
+        // the changed reference base is mapped to seq[rg.first]
+        assert(0 <= rg.first and rg.second <= static_cast< int >(seq.size()));
+        if (seq[rg.first] == v.allele_seq_v[v.gt[0]][0])
+            return 0;
+        else if (seq[rg.first] == v.allele_seq_v[v.gt[1]][0])
+            return 1;
+        else
+            return -1;
+    }
+}
+
+int get_phase_indel(int, int, const Cigar&, const DNA_Sequence&, const Het_Variation&)
+{
     return -1;
 }
 
-void process_mapping(const bam1_t * rec_p)
+int get_phase(int rf_start, int rf_len, const Cigar& cigar, const DNA_Sequence& seq, const Het_Variation& v)
+{
+    // for now, only deal with SNPs
+    return v.is_snp
+        ? get_phase_snp(rf_start, rf_len, cigar, seq, v)
+        : get_phase_indel(rf_start, rf_len, cigar, seq, v);
+}
+
+string get_out_map_fn(const string& chr_name, int phase)
+{
+    ostringstream os;
+    os << global::out_map_fn.get() << "." << chr_name << "." << phase << ".bam";
+    return os.str();
+}
+
+void close_out_map_files()
+{
+    assert((global::crt_out_map_file_p[0] != nullptr) == (global::crt_out_map_file_p[1] != nullptr));
+    if (global::crt_out_map_file_p[0])
+    {
+        hts_close(global::crt_out_map_file_p[0]);
+        hts_close(global::crt_out_map_file_p[1]);
+    }
+}
+
+void open_out_map_files(const string& chr_name)
+{
+    assert(not global::crt_out_map_file_p[0] and not global::crt_out_map_file_p[1]);
+    global::crt_out_map_file_p[0] = hts_open(get_out_map_fn(chr_name, 0).c_str(), "wb");
+    global::crt_out_map_file_p[1] = hts_open(get_out_map_fn(chr_name, 1).c_str(), "wb");
+    int res = sam_hdr_write(global::crt_out_map_file_p[0], global::map_hdr_p);
+    if (res != 0)
+    {
+        cerr << "error in sam_hdr_write(): status=" << res << endl;
+        exit(EXIT_FAILURE);
+    }
+    res = sam_hdr_write(global::crt_out_map_file_p[1], global::map_hdr_p);
+    if (res != 0)
+    {
+        cerr << "error in sam_hdr_write(): status=" << res << endl;
+        exit(EXIT_FAILURE);
+    }
+    global::crt_chr = chr_name;
+    LOG("main", info) << "opened output files for chr=[" << chr_name << "]" << endl;
+}
+
+void implement_decision(const bam1_t * rec_p, const string& chr_name, int decision)
+{
+    assert(decision == 0 or decision == 1);
+    ++global::num_map_output;
+
+    if (global::crt_chr != chr_name)
+    {
+        // new chromosome
+        close_out_map_files();
+        open_out_map_files(chr_name);
+    }
+    int res = sam_write1(global::crt_out_map_file_p[decision], global::map_hdr_p, rec_p);
+    if (res < 0)
+    {
+        cerr << "error in sam_write1(): status=" << res << endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
+void set_single_decision(int & decision)
+{
+    if (decision < 0)
+    {
+        if (decision == -1)
+        {
+            ++global::num_frag_inconclusive_decision;
+        }
+        else
+        {
+            ++global::num_frag_random_decision;
+        }
+        decision = lrand48() % 2;
+    }
+}
+
+/**
+ * Process one mapping.
+ * Returns:
+ *   0: if bam record can be reused
+ *   1: bam record was saved for deferred decision
+ */
+int process_mapping(bam1_t * rec_p)
 {
     string query_name = bam_get_qname(rec_p);
     bool is_paired = rec_p->core.flag & BAM_FPAIRED;
@@ -252,27 +383,25 @@ void process_mapping(const bam1_t * rec_p)
     bool is_mp_mapped = not (rec_p->core.flag & BAM_FMUNMAP);
     bool is_primary = not (rec_p->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY));
     string chr_name = global::map_hdr_p->target_name[rec_p->core.tid];
-    int rf_start = rec_p->core.pos;
-    auto cigar_ptr = bam_get_cigar(rec_p);
-    string cigar_string;
-    for (int i = 0; i < rec_p->core.n_cigar; ++i)
+    string mp_chr_name;
+    if (is_mp_mapped)
     {
-        ostringstream oss;
-        oss << bam_cigar_oplen(cigar_ptr[i]);
-        cigar_string += oss.str() + bam_cigar_opchr(cigar_ptr[i]);
+        mp_chr_name = global::map_hdr_p->target_name[rec_p->core.mtid];
     }
-    int rf_len = bam_cigar2rlen(rec_p->core.n_cigar, cigar_ptr);
+    int rf_start = rec_p->core.pos;
+    Cigar cigar(bam_get_cigar(rec_p), rec_p->core.n_cigar);
+    int rf_len = cigar.rf_len();
     auto seq_ptr = bam_get_seq(rec_p);
     DNA_Sequence seq;
     for (int i = 0; i < rec_p->core.l_qseq; ++i)
     {
         seq += seq_nt16_str[bam_seqi(seq_ptr, i)];
     }
-    bool mp_seen = global::mp_dec_m.count(query_name) > 0;
+    bool mp_seen = global::mp_store_m.count(query_name) > 0;
     int mp_decision = -1;
     if (mp_seen)
     {
-        mp_decision = global::mp_dec_m.at(query_name);
+        mp_decision = global::mp_store_m.at(query_name).second;
     }
 
     LOG("mappings", debug)
@@ -286,15 +415,26 @@ void process_mapping(const bam1_t * rec_p)
         << chr_name << "\t"
         << rf_start << "\t"
         << rf_len << "\t"
-        << cigar_string << "\t"
+        << cigar.to_string() << "\t"
         << seq << endl;
+
+    // drop non-primary mappings
+    if (not is_primary)
+    {
+        ++global::num_map_nonprimary;
+        return 0;
+    }
 
     // compute range of variations spanned by this mapping
     int decision = -2; // unmapped
     if (is_mapped)
     {
-        decision = -1; // not spanning any hets
-        if (global::var_m.count(chr_name) > 0)
+        decision = -3; // not spanning any hets
+        if (global::chr_phase_m.count(chr_name))
+        {
+            decision = global::chr_phase_m.at(chr_name);
+        }
+        else if (global::var_m.count(chr_name) > 0)
         {
             Het_Variation search_key;
             search_key.rf_start = rf_start;
@@ -304,16 +444,11 @@ void process_mapping(const bam1_t * rec_p)
             if (it_start != it_end)
             {
                 // mapping spans at least one het
-                // for now: compute phasing using only first phased het
-                auto it = it_start;
-                for (; it != it_end and not it->is_phased; ++it);
-                if (it != it_end)
+                // for now: compute phasing using only first het
+                decision = get_phase(rf_start, rf_len, cigar, seq, *it_start);
+                if (decision == -1)
                 {
-                    int phase = get_phase(rf_start, rf_len, cigar_string, seq, *it);
-                    if (phase != -1)
-                    {
-                        decision = phase;
-                    }
+                    ++global::num_map_inconclusive_phasing;
                 }
             }
         }
@@ -321,11 +456,133 @@ void process_mapping(const bam1_t * rec_p)
 
     if (not mp_seen)
     {
-        global::mp_dec_m[query_name] = decision;
+        if (not is_mapped)
+        {
+            if (is_mp_mapped)
+            {
+                // 1st read
+                // 1st read unmapped
+                // 2nd read mapped
+                // => defer decision
+                global::mp_store_m[query_name] = make_pair(rec_p, -2);
+                return 1;
+            }
+            else
+            {
+                // 1st read
+                // 1st read unmapped
+                // 2nd read unmapped
+                // => dump fragment
+                ++global::num_frag_unmapped;
+                return 0;
+            }
+        }
+        else
+        {
+            if (is_mp_mapped and mp_chr_name == chr_name)
+            {
+                // 1st read
+                // 1st mapped
+                // 2nd mapped to same chr
+                // => defer decision
+                global::mp_store_m[query_name] = make_pair(rec_p, decision);
+                return 1;
+            }
+            else
+            {
+                // 1st read
+                // 1st mapped
+                // 2nd unmapped or 2nd mapped to different chr
+                // => take decision and save it for logging
+                if (is_mp_mapped)
+                {
+                    ++global::num_frag_diff_chr;
+                }
+                set_single_decision(decision);
+                implement_decision(rec_p, chr_name, decision);
+                global::mp_store_m[query_name] = make_pair(nullptr, decision);
+                return 0;
+            }
+        }
     }
     else
     {
-        global::mp_dec_m.erase(query_name);
+        if (not is_mapped and not is_mp_mapped)
+        {
+            // 2nd read
+            // 1st & 2nd unmapped
+            // => dump fragment
+            return 0;
+        }
+        else
+        {
+            // 2nd read
+            // 1st or 2nd mapped
+            // there must be a record of the decision for 1st
+            bam1_t * mp_rec_p;
+            int mp_decision;
+            tie(mp_rec_p, mp_decision) = global::mp_store_m.at(query_name);
+            global::mp_store_m.erase(query_name);
+            if (mp_rec_p)
+            {
+                // decision for 1st read was deferred
+                assert(not is_mp_mapped or chr_name == mp_chr_name);
+                int frag_decision;
+                if (decision >= 0 and mp_decision >= 0 and decision != mp_decision)
+                {
+                    // conflicting decisions
+                    ++global::num_frag_conflicting_decision;
+                    frag_decision = lrand48() % 2;
+                }
+                else if (decision < 0 or mp_decision < 0)
+                {
+                    if (decision < 0 and mp_decision < 0)
+                    {
+                        if (decision == -1 or mp_decision == -1)
+                        {
+                            ++global::num_frag_inconclusive_decision;
+                        }
+                        else
+                        {
+                            ++global::num_frag_random_decision;
+                        }
+                        frag_decision = lrand48() % 2;
+                    }
+                    else
+                    {
+                        ++global::num_frag_single_decision;
+                        frag_decision = decision >= 0? decision : mp_decision;
+                    }
+                }
+                else
+                {
+                    assert(decision >= 0 and mp_decision >= 0 and decision == mp_decision);
+                    ++global::num_frag_concordant_decision;
+                    frag_decision = decision;
+                }
+                implement_decision(mp_rec_p, chr_name, frag_decision);
+                implement_decision(rec_p, chr_name, frag_decision);
+                bam_destroy1(mp_rec_p);
+                return 0;
+            }
+            else
+            {
+                // decision for 1st read was not deferred
+                assert(is_mp_mapped);
+                if (is_mapped)
+                {
+                    assert(chr_name != mp_chr_name);
+                    set_single_decision(decision);
+                    implement_decision(rec_p, chr_name, decision);
+                }
+                else
+                {
+                    assert(chr_name == mp_chr_name);
+                    implement_decision(rec_p, chr_name, mp_decision);
+                }
+                return 0;
+            }
+        }
     }
 }
 
@@ -334,15 +591,36 @@ void process_mappings()
     global::map_file_p = hts_open(global::map_fn.get().c_str(), "r");
     global::map_hdr_p = sam_hdr_read(global::map_file_p);
 
-    auto rec_p = bam_init1();
+    bam1_t * rec_p = bam_init1();
     while (sam_read1(global::map_file_p, global::map_hdr_p, rec_p) >= 0)
     {
-        process_mapping(rec_p);
+        int res = process_mapping(rec_p);
+        if (res == 1)
+        {
+            rec_p = bam_init1();
+        }
     }
     bam_destroy1(rec_p);
 
+    close_out_map_files();
     bam_hdr_destroy(global::map_hdr_p);
     hts_close(global::map_file_p);
+}
+
+void print_stats(ostream & os)
+{
+    os
+        << "fragments_random_decision: " << global::num_frag_random_decision << endl
+        << "fragments_inconclusive_decision: " << global::num_frag_inconclusive_decision << endl
+        << "fragments_single_decision: " << global::num_frag_single_decision << endl
+        << "fragments_concordant_decision: " << global::num_frag_concordant_decision << endl
+        << "fragments_conflicting_decision: " << global::num_frag_conflicting_decision << endl
+        << "fragments_unmapped: " << global::num_frag_unmapped << endl
+        << "fragments_diff_chr: " << global::num_frag_diff_chr << endl
+        << "mappings_nonprimary: " << global::num_map_nonprimary << endl
+        << "mappings_output: " << global::num_map_output << endl
+        << "mappings_inconclusive: " << global::num_map_inconclusive_phasing << endl
+        ;
 }
 
 void real_main()
@@ -351,9 +629,8 @@ void real_main()
     load_reference_index();
     load_variations();
     //print_variations(clog);
-
     process_mappings();
-
+    print_stats(cout);
     // cleanup
     fai_destroy(global::faidx_p);
 }
