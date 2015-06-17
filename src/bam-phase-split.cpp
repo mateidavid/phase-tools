@@ -379,8 +379,8 @@ int process_mapping(bam1_t * rec_p)
     Mapping m(global::map_hdr_p, rec_p);
     bool mp_stored = global::mp_store_m.count(m.query_name()) > 0;
     assert(not mp_stored or m.treat_as_paired());
-    bam1_t * mp_rec_p;
-    int mp_decision;
+    bam1_t * mp_rec_p = nullptr;
+    int mp_decision = -2;
     if (mp_stored)
     {
         tie(mp_rec_p, mp_decision) = global::mp_store_m.at(m.query_name());
