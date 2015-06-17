@@ -15,6 +15,7 @@
 #include "logger.hpp"
 #include "RC_Sequence.hpp"
 #include "Cigar.hpp"
+#include "Mapping.hpp"
 
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION "missing_version"
@@ -100,16 +101,34 @@ namespace global
     map< string, pair< bam1_t *, int > > mp_store_m;
 
     // counts
-    size_t num_frag_random_decision;
-    size_t num_frag_inconclusive_decision;
-    size_t num_frag_single_decision;
-    size_t num_frag_concordant_decision;
-    size_t num_frag_conflicting_decision;
-    size_t num_frag_unmapped;
-    size_t num_frag_diff_chr;
-    size_t num_map_nonprimary;
-    size_t num_map_output;
-    size_t num_map_inconclusive_phasing;
+    size_t num_in_map_total;
+    size_t num_in_map_nonprimary;
+    size_t num_in_map_unpaired;
+    size_t num_in_map_unpaired_unmapped;
+    size_t num_in_map_unpaired_mapped;
+    size_t num_in_map_paired;
+    size_t num_in_map_paired_unmapped;
+    size_t num_in_map_paired_mapped;
+    size_t num_in_map_paired_both_unmapped;
+    size_t num_in_map_paired_both_mapped;
+    size_t num_in_map_paired_both_mapped_diff_chr;
+
+    size_t num_out_map_unpaired_total;
+    size_t num_out_map_unpaired_inconclusive;
+    size_t num_out_map_unpaired_random;
+    size_t num_out_map_unpaired_phased;
+
+    size_t num_out_frag_total;
+    size_t num_out_frag_conflicting;
+    size_t num_out_frag_inconclusive;
+    size_t num_out_frag_random;
+    size_t num_out_frag_single_sided;
+    size_t num_out_frag_concordant;
+    size_t num_out_frag_missing_unmapped;
+    size_t num_out_frag_missing_mapped;
+
+    size_t num_out_map_total;
+    size_t num_out_map_preset;
 } // namespace global
 
 void set_chr_phase_m()
@@ -260,11 +279,11 @@ void print_variations(ostream& os)
     }
 }
 
-int get_phase_snp(int rf_start, int rf_len, const Cigar& cigar, const DNA_Sequence& seq, const Het_Variation& v)
+int get_phase_snp(const Mapping & m, const Het_Variation & v)
 {
-    assert(rf_start <= v.rf_start and v.rf_start + v.rf_len <= rf_start + rf_len);
+    assert(m.rf_start() <= v.rf_start and v.rf_start + v.rf_len <= m.rf_start() + m.rf_len());
     // compute the mapped range, on query, of the single reference position
-    auto rg = cigar.mapped_range(make_pair(v.rf_start - rf_start, v.rf_start - rf_start + 1), true);
+    auto rg = m.cigar().mapped_range(make_pair(v.rf_start - m.rf_start(), v.rf_start - m.rf_start() + 1), true);
     if (rg.second != rg.first + 1)
     {
         // the changed reference base is mapped to something other than a match; we give up
@@ -273,27 +292,110 @@ int get_phase_snp(int rf_start, int rf_len, const Cigar& cigar, const DNA_Sequen
     else
     {
         // the changed reference base is mapped to seq[rg.first]
-        assert(0 <= rg.first and rg.second <= static_cast< int >(seq.size()));
-        if (seq[rg.first] == v.allele_seq_v[v.gt[0]][0])
+        assert(0 <= rg.first and rg.second <= static_cast< int >(m.seq().size()));
+        if (m.seq()[rg.first] == v.allele_seq_v[v.gt[0]][0])
             return 0;
-        else if (seq[rg.first] == v.allele_seq_v[v.gt[1]][0])
+        else if (m.seq()[rg.first] == v.allele_seq_v[v.gt[1]][0])
             return 1;
         else
             return -1;
     }
 }
 
-int get_phase_indel(int, int, const Cigar&, const DNA_Sequence&, const Het_Variation&)
+int get_phase_indel(const Mapping &, const Het_Variation &)
 {
     return -1;
 }
 
-int get_phase(int rf_start, int rf_len, const Cigar& cigar, const DNA_Sequence& seq, const Het_Variation& v)
+int get_phase(const Mapping & m, const Het_Variation & v)
 {
     // for now, only deal with SNPs
     return v.is_snp
-        ? get_phase_snp(rf_start, rf_len, cigar, seq, v)
-        : get_phase_indel(rf_start, rf_len, cigar, seq, v);
+        ? get_phase_snp(m, v)
+        : get_phase_indel(m, v);
+}
+
+void close_out_map_files();
+void open_out_map_files(const string&);
+
+void implement_decision(const bam1_t * rec_p, const string& chr_name, int decision)
+{
+    assert(decision == 0 or decision == 1);
+    ++global::num_out_map_total;
+
+    if (global::crt_chr != chr_name)
+    {
+        // new chromosome
+        close_out_map_files();
+        open_out_map_files(chr_name);
+    }
+    int res = sam_write1(global::crt_out_map_file_p[decision], global::map_hdr_p, rec_p);
+    if (res < 0)
+    {
+        cerr << "error in sam_write1(): status=" << res << endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
+int get_unpaired_decision(int decision)
+{
+    ++global::num_out_map_unpaired_total;
+    if (decision < 0)
+    {
+        if (decision == -1)
+        {
+            ++global::num_out_map_unpaired_inconclusive;
+        }
+        else
+        {
+            ++global::num_out_map_unpaired_random;
+        }
+        decision = lrand48() % 2;
+    }
+    else
+    {
+        ++global::num_out_map_unpaired_phased;
+    }
+    return decision;
+}
+
+int get_paired_decision(int decision, int mp_decision)
+{
+    int frag_decision;
+    ++global::num_out_frag_total;
+    if (decision >= 0 and mp_decision >= 0 and decision != mp_decision)
+    {
+        // conflicting decisions
+        ++global::num_out_frag_conflicting;
+        frag_decision = lrand48() % 2;
+    }
+    else if (decision < 0 or mp_decision < 0)
+    {
+        if (decision < 0 and mp_decision < 0)
+        {
+            if (decision == -1 or mp_decision == -1)
+            {
+                ++global::num_out_frag_inconclusive;
+            }
+            else
+            {
+                ++global::num_out_frag_random;
+            }
+            frag_decision = lrand48() % 2;
+        }
+        else
+        {
+            ++global::num_out_frag_single_sided;
+            frag_decision = decision >= 0? decision : mp_decision;
+        }
+    }
+    else
+    {
+        assert(decision >= 0 and mp_decision >= 0 and decision == mp_decision);
+        ++global::num_out_frag_concordant;
+        frag_decision = decision;
+    }
+    return frag_decision;
 }
 
 string get_out_map_fn(const string& chr_name, int phase)
@@ -308,6 +410,27 @@ void close_out_map_files()
     assert((global::crt_out_map_file_p[0] != nullptr) == (global::crt_out_map_file_p[1] != nullptr));
     if (global::crt_out_map_file_p[0])
     {
+        assert(not global::crt_chr.empty());
+        // first, flush any paired reads that are currently stored
+        for (const auto & p : global::mp_store_m)
+        {
+            bam1_t * rec_p;
+            int decision;
+            tie(rec_p, decision) = p.second;
+            if (not rec_p)
+            {
+                ++global::num_out_frag_missing_unmapped;
+            }
+            else
+            {
+                ++global::num_out_frag_missing_mapped;
+                decision = get_paired_decision(decision, -2);
+                implement_decision(rec_p, global::crt_chr, decision);
+                bam_destroy1(rec_p);
+            }
+        }
+        global::mp_store_m.clear();
+        // close files
         hts_close(global::crt_out_map_file_p[0]);
         hts_close(global::crt_out_map_file_p[1]);
     }
@@ -334,41 +457,6 @@ void open_out_map_files(const string& chr_name)
     LOG("main", info) << "opened output files for chr=[" << chr_name << "]" << endl;
 }
 
-void implement_decision(const bam1_t * rec_p, const string& chr_name, int decision)
-{
-    assert(decision == 0 or decision == 1);
-    ++global::num_map_output;
-
-    if (global::crt_chr != chr_name)
-    {
-        // new chromosome
-        close_out_map_files();
-        open_out_map_files(chr_name);
-    }
-    int res = sam_write1(global::crt_out_map_file_p[decision], global::map_hdr_p, rec_p);
-    if (res < 0)
-    {
-        cerr << "error in sam_write1(): status=" << res << endl;
-        exit(EXIT_FAILURE);
-    }
-}
-
-void set_single_decision(int & decision)
-{
-    if (decision < 0)
-    {
-        if (decision == -1)
-        {
-            ++global::num_frag_inconclusive_decision;
-        }
-        else
-        {
-            ++global::num_frag_random_decision;
-        }
-        decision = lrand48() % 2;
-    }
-}
-
 /**
  * Process one mapping.
  * Returns:
@@ -377,209 +465,156 @@ void set_single_decision(int & decision)
  */
 int process_mapping(bam1_t * rec_p)
 {
-    string query_name = bam_get_qname(rec_p);
-    bool is_paired = rec_p->core.flag & BAM_FPAIRED;
-    bool is_mapped = not (rec_p->core.flag & BAM_FUNMAP);
-    bool is_mp_mapped = not (rec_p->core.flag & BAM_FMUNMAP);
-    bool is_primary = not (rec_p->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY));
-    string chr_name = global::map_hdr_p->target_name[rec_p->core.tid];
-    string mp_chr_name;
-    if (is_mp_mapped)
+    Mapping m(global::map_hdr_p, rec_p);
+    bool mp_stored = global::mp_store_m.count(m.query_name()) > 0;
+    assert(not mp_stored or m.treat_as_paired());
+    bam1_t * mp_rec_p;
+    int mp_decision;
+    if (mp_stored)
     {
-        mp_chr_name = global::map_hdr_p->target_name[rec_p->core.mtid];
+        tie(mp_rec_p, mp_decision) = global::mp_store_m.at(m.query_name());
     }
-    int rf_start = rec_p->core.pos;
-    Cigar cigar(bam_get_cigar(rec_p), rec_p->core.n_cigar);
-    int rf_len = cigar.rf_len();
-    auto seq_ptr = bam_get_seq(rec_p);
-    DNA_Sequence seq;
-    for (int i = 0; i < rec_p->core.l_qseq; ++i)
-    {
-        seq += seq_nt16_str[bam_seqi(seq_ptr, i)];
-    }
-    bool mp_seen = global::mp_store_m.count(query_name) > 0;
-    int mp_decision = -1;
-    if (mp_seen)
-    {
-        mp_decision = global::mp_store_m.at(query_name).second;
-    }
-
     LOG("mappings", debug)
-        << query_name << "\t"
-        << (is_paired? "paired" : "unpaired") << "\t"
-        << (is_mapped? "mapped" : "unmapped") << "\t"
-        << (is_mp_mapped? "mp_mapped" : "mp_unmapped") << "\t"
-        << (is_primary? "primary" : "non-primary") << "\t"
-        << (mp_seen? "second" : "first") << "\t"
-        << mp_decision << "\t"
-        << chr_name << "\t"
-        << rf_start << "\t"
-        << rf_len << "\t"
-        << cigar.to_string() << "\t"
-        << seq << endl;
+        << m << "\t"
+        << (mp_stored? "mp_stored" : "mp_not_stored") << "\t"
+        << (mp_stored? (mp_rec_p? "non_null_rec" : "null_rec") : "") << "\t"
+        << (mp_stored? mp_decision : -5) << "\t"
+        << endl;
 
-    // drop non-primary mappings
-    if (not is_primary)
+    // update input mapping counts
+    ++global::num_in_map_total;
+    if (not m.is_primary())
     {
-        ++global::num_map_nonprimary;
+        // drop non-primary mappings
+        ++global::num_in_map_nonprimary;
         return 0;
     }
-
-    // compute range of variations spanned by this mapping
-    int decision = -2; // unmapped
-    if (is_mapped)
+    if (not m.is_paired())
     {
-        decision = -3; // not spanning any hets
-        if (global::chr_phase_m.count(chr_name))
+        assert(not mp_stored);
+        ++global::num_in_map_unpaired;
+        if (not m.is_mapped())
         {
-            decision = global::chr_phase_m.at(chr_name);
-        }
-        else if (global::var_m.count(chr_name) > 0)
-        {
-            Het_Variation search_key;
-            search_key.rf_start = rf_start;
-            auto it_start = global::var_m.at(chr_name).lower_bound(search_key);
-            search_key.rf_start = rf_start + rf_len;
-            auto it_end = global::var_m.at(chr_name).lower_bound(search_key);
-            if (it_start != it_end)
-            {
-                // mapping spans at least one het
-                // for now: compute phasing using only first het
-                decision = get_phase(rf_start, rf_len, cigar, seq, *it_start);
-                if (decision == -1)
-                {
-                    ++global::num_map_inconclusive_phasing;
-                }
-            }
-        }
-    }
-
-    if (not mp_seen)
-    {
-        if (not is_mapped)
-        {
-            if (is_mp_mapped)
-            {
-                // 1st read
-                // 1st read unmapped
-                // 2nd read mapped
-                // => defer decision
-                global::mp_store_m[query_name] = make_pair(rec_p, -2);
-                return 1;
-            }
-            else
-            {
-                // 1st read
-                // 1st read unmapped
-                // 2nd read unmapped
-                // => dump fragment
-                ++global::num_frag_unmapped;
-                return 0;
-            }
-        }
-        else
-        {
-            if (is_mp_mapped and mp_chr_name == chr_name)
-            {
-                // 1st read
-                // 1st mapped
-                // 2nd mapped to same chr
-                // => defer decision
-                global::mp_store_m[query_name] = make_pair(rec_p, decision);
-                return 1;
-            }
-            else
-            {
-                // 1st read
-                // 1st mapped
-                // 2nd unmapped or 2nd mapped to different chr
-                // => take decision and save it for logging
-                if (is_mp_mapped)
-                {
-                    ++global::num_frag_diff_chr;
-                }
-                set_single_decision(decision);
-                implement_decision(rec_p, chr_name, decision);
-                global::mp_store_m[query_name] = make_pair(nullptr, decision);
-                return 0;
-            }
-        }
-    }
-    else
-    {
-        if (not is_mapped and not is_mp_mapped)
-        {
-            // 2nd read
-            // 1st & 2nd unmapped
-            // => dump fragment
+            // drop unpaired & unmapped
+            ++global::num_in_map_unpaired_unmapped;
             return 0;
         }
         else
         {
-            // 2nd read
-            // 1st or 2nd mapped
-            // there must be a record of the decision for 1st
-            bam1_t * mp_rec_p;
-            int mp_decision;
-            tie(mp_rec_p, mp_decision) = global::mp_store_m.at(query_name);
-            global::mp_store_m.erase(query_name);
+            ++global::num_in_map_unpaired_mapped;
+        }
+    }
+    else // primary, paired
+    {
+        if (m.is_mapped())
+        {
+            ++global::num_in_map_paired_mapped;
+        }
+        else
+        {
+            ++global::num_in_map_paired_unmapped;
+        }
+        if (not m.is_mapped() and not m.mp_is_mapped())
+        {
+            // drop paired & both unmapped
+            ++global::num_in_map_paired_both_unmapped;
+            return 0;
+        }
+        if (m.is_mapped() and m.mp_is_mapped())
+        {
+            ++global::num_in_map_paired_both_mapped;
+            if(m.chr_name() != m.mp_chr_name())
+            {
+                assert(not mp_stored);
+                ++global::num_in_map_paired_both_mapped_diff_chr;
+            }
+        }
+    }
+    assert(m.is_mapped() or m.treat_as_paired());
+
+    // compute decision for current mapping
+    int decision;
+    if (not m.is_mapped())
+    {
+        decision = -2; // unmapped
+    }
+    else
+    {
+        if (global::chr_phase_m.count(m.chr_name()))
+        {
+            ++global::num_out_map_preset;
+            decision = global::chr_phase_m.at(m.chr_name()); // preset
+        }
+        else if (not global::var_m.count(m.chr_name()))
+        {
+            decision = -3; // not spanning any hets
+        }
+        else
+        {
+            // compute range of variations spanned by this mapping
+            Het_Variation search_key;
+            search_key.rf_start = m.rf_start();
+            auto it_start = global::var_m.at(m.chr_name()).lower_bound(search_key);
+            search_key.rf_start = m.rf_start() + m.rf_len();
+            auto it_end = global::var_m.at(m.chr_name()).lower_bound(search_key);
+            if (it_start != it_end)
+            {
+                // mapping spans at least one het
+                // for now: compute phasing using only first het
+                decision = get_phase(m, *it_start);
+            }
+            else
+            {
+                decision = -3; // not spanning any hets
+            }
+        }
+    }
+
+    if (not m.treat_as_paired())
+    {
+        decision = get_unpaired_decision(decision);
+        implement_decision(rec_p, m.chr_name(), decision);
+        return 0;
+    }
+    else
+    {
+        if (not mp_stored)
+        {
+            if (m.is_mapped() and not m.mp_is_mapped())
+            {
+                // paired & 1st & 1st mapped & 2nd unmapped
+                // => implement decision & store it
+                decision = get_paired_decision(decision, -2);
+                implement_decision(rec_p, m.chr_name(), decision);
+                global::mp_store_m[m.query_name()] = make_pair(nullptr, decision);
+                return 0;
+            }
+            else
+            {
+                // paired & 1st & (1st unmapped or 2nd mapped)
+                // => defer decision
+                global::mp_store_m[m.query_name()] = make_pair(rec_p, decision);
+                return 1;
+            }
+        }
+        else
+        {
+            // paired & 2nd
+            global::mp_store_m.erase(m.query_name());
             if (mp_rec_p)
             {
                 // decision for 1st read was deferred
-                assert(not is_mp_mapped or chr_name == mp_chr_name);
-                int frag_decision;
-                if (decision >= 0 and mp_decision >= 0 and decision != mp_decision)
-                {
-                    // conflicting decisions
-                    ++global::num_frag_conflicting_decision;
-                    frag_decision = lrand48() % 2;
-                }
-                else if (decision < 0 or mp_decision < 0)
-                {
-                    if (decision < 0 and mp_decision < 0)
-                    {
-                        if (decision == -1 or mp_decision == -1)
-                        {
-                            ++global::num_frag_inconclusive_decision;
-                        }
-                        else
-                        {
-                            ++global::num_frag_random_decision;
-                        }
-                        frag_decision = lrand48() % 2;
-                    }
-                    else
-                    {
-                        ++global::num_frag_single_decision;
-                        frag_decision = decision >= 0? decision : mp_decision;
-                    }
-                }
-                else
-                {
-                    assert(decision >= 0 and mp_decision >= 0 and decision == mp_decision);
-                    ++global::num_frag_concordant_decision;
-                    frag_decision = decision;
-                }
-                implement_decision(mp_rec_p, chr_name, frag_decision);
-                implement_decision(rec_p, chr_name, frag_decision);
+                int frag_decision = get_paired_decision(decision, mp_decision);
+                implement_decision(mp_rec_p, m.chr_name(), frag_decision);
+                implement_decision(rec_p, m.chr_name(), frag_decision);
                 bam_destroy1(mp_rec_p);
                 return 0;
             }
             else
             {
                 // decision for 1st read was not deferred
-                assert(is_mp_mapped);
-                if (is_mapped)
-                {
-                    assert(chr_name != mp_chr_name);
-                    set_single_decision(decision);
-                    implement_decision(rec_p, chr_name, decision);
-                }
-                else
-                {
-                    assert(chr_name == mp_chr_name);
-                    implement_decision(rec_p, chr_name, mp_decision);
-                }
+                assert(m.is_paired() and m.mp_is_mapped() and not m.is_mapped());
+                implement_decision(rec_p, m.mp_chr_name(), mp_decision);
                 return 0;
             }
         }
@@ -610,16 +645,34 @@ void process_mappings()
 void print_stats(ostream & os)
 {
     os
-        << "fragments_random_decision: " << global::num_frag_random_decision << endl
-        << "fragments_inconclusive_decision: " << global::num_frag_inconclusive_decision << endl
-        << "fragments_single_decision: " << global::num_frag_single_decision << endl
-        << "fragments_concordant_decision: " << global::num_frag_concordant_decision << endl
-        << "fragments_conflicting_decision: " << global::num_frag_conflicting_decision << endl
-        << "fragments_unmapped: " << global::num_frag_unmapped << endl
-        << "fragments_diff_chr: " << global::num_frag_diff_chr << endl
-        << "mappings_nonprimary: " << global::num_map_nonprimary << endl
-        << "mappings_output: " << global::num_map_output << endl
-        << "mappings_inconclusive: " << global::num_map_inconclusive_phasing << endl
+        << "num_in_map_total: " << global::num_in_map_total << endl
+        << "num_in_map_nonprimary: " << global::num_in_map_nonprimary << endl
+        << "num_in_map_unpaired: " << global::num_in_map_unpaired << endl
+        << "num_in_map_unpaired_unmapped: " << global::num_in_map_unpaired_unmapped << endl
+        << "num_in_map_unpaired_mapped: " << global::num_in_map_unpaired_mapped << endl
+        << "num_in_map_paired: " << global::num_in_map_paired << endl
+        << "num_in_map_paired_unmapped: " << global::num_in_map_paired_unmapped << endl
+        << "num_in_map_paired_mapped: " << global::num_in_map_paired_mapped << endl
+        << "num_in_map_paired_both_unmapped: " << global::num_in_map_paired_both_unmapped << endl
+        << "num_in_map_paired_both_mapped: " << global::num_in_map_paired_both_mapped << endl
+        << "num_in_map_paired_both_mapped_diff_chr: " << global::num_in_map_paired_both_mapped_diff_chr << endl
+
+        << "num_out_map_unpaired_total: " << global::num_out_map_unpaired_total << endl
+        << "num_out_map_unpaired_inconclusive: " << global::num_out_map_unpaired_inconclusive << endl
+        << "num_out_map_unpaired_random: " << global::num_out_map_unpaired_random << endl
+        << "num_out_map_unpaired_phased: " << global::num_out_map_unpaired_phased << endl
+
+        << "num_out_frag_total: " << global::num_out_frag_total << endl
+        << "num_out_frag_conflicting: " << global::num_out_frag_conflicting << endl
+        << "num_out_frag_inconclusive: " << global::num_out_frag_inconclusive << endl
+        << "num_out_frag_random: " << global::num_out_frag_random << endl
+        << "num_out_frag_single_sided: " << global::num_out_frag_single_sided << endl
+        << "num_out_frag_concordant: " << global::num_out_frag_concordant << endl
+        << "num_out_frag_missing_unmapped: " << global::num_out_frag_missing_unmapped << endl
+        << "num_out_frag_missing_mapped: " << global::num_out_frag_missing_mapped << endl
+
+        << "num_out_map_total: " << global::num_out_map_total << endl
+        << "num_out_map_preset: " << global::num_out_map_preset << endl
         ;
 }
 
