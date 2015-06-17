@@ -52,6 +52,7 @@ public:
     const Cigar & cigar() const { return _cigar; }
     int rf_start() const { return _rf_start; }
     int rf_len() const { return _rf_len; }
+    int rf_end() const { return rf_start() + rf_len(); }
     int mp_rf_start() const { return _mp_rf_start; }
 
     friend std::ostream & operator << (std::ostream & os, const Mapping & m)

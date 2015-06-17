@@ -92,7 +92,8 @@ include_directories(SYSTEM
     ${ZLIB_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
     ${HTSlib_INCLUDE_DIR}
-    tclap/include)
+    tclap/include
+    zstr/src)
 include_directories(
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_BINARY_DIR})

@@ -12,8 +12,10 @@
 #include <tclap/CmdLine.h>
 #include "version.h"
 
+#include "zstr.hpp"
 #include "logger.hpp"
 #include "RC_Sequence.hpp"
+#include "Het_Variation.hpp"
 #include "Cigar.hpp"
 #include "Mapping.hpp"
 
@@ -24,37 +26,6 @@
 using namespace std;
 
 typedef rc_sequence::Sequence< string > DNA_Sequence;
-
-class Het_Variation
-{
-public:
-    DNA_Sequence flank_seq[2];
-    vector< DNA_Sequence > allele_seq_v;
-    int rf_start;
-    int rf_len;
-    int gt[2];
-    bool is_phased;
-    bool is_snp; // true iff all of (potentially 3) alleles: ref, gt[0], gt[1] are length 1
-    unsigned long fragment_count[2];
-
-    friend bool operator < (const Het_Variation& lhs, const Het_Variation& rhs)
-    {
-        return lhs.rf_start < rhs.rf_start;
-    }
-
-    friend ostream& operator << (ostream& os, const Het_Variation& v)
-    {
-        os << v.rf_start + 1 << "\t";
-        for (size_t i = 0; i < v.allele_seq_v.size(); ++i)
-        {
-            os << v.allele_seq_v[i] << ((i > 0 and i < v.allele_seq_v.size()-1)? "," : "\t");
-        }
-        os << v.gt[0] << (v.is_phased? "|" : "/") << v.gt[1] << "\t"
-           << v.flank_seq[0] << "\t" << v.flank_seq[1] << "\t"
-           << (v.is_snp? "snp" : "indel") << endl;
-        return os;
-    }
-}; // class Variation
 
 namespace global
 {
@@ -79,6 +50,7 @@ namespace global
     ValueArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "", "file", cmd_parser);
     ValueArg< string > out_map_fn("", "out", "Output file prefix. Files names will be <prefix>.<chr>.[01].bam", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
+    ValueArg< string > var_stats_fn("", "var-stats", "Variations stats file.", false, "", "file", cmd_parser);
     //
     // other parameters
     //
@@ -162,7 +134,7 @@ void load_variations()
     auto f_p = bcf_open(global::var_fn.get().c_str(), "r");
     auto hdr_p = bcf_hdr_read(f_p);
     auto rec_p = bcf_init1();
-    int * dat = nullptr;// = new int [bcf_hdr_nsamples(hdr_p)*2];
+    int * dat = nullptr; // = new int [bcf_hdr_nsamples(hdr_p)*2];
     int dat_size = 0;
     // restrict processing to given sample_id
     ret = bcf_hdr_set_samples(hdr_p, global::sample_id.get().c_str(), 0);
@@ -174,83 +146,17 @@ void load_variations()
     // main loop
     while (bcf_read1(f_p, hdr_p, rec_p) >= 0)
     {
-        Het_Variation v;
         bcf_unpack(rec_p, BCF_UN_ALL);
-        int n_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
-        string chr_name = bcf_hdr_id2name(hdr_p, rec_p->rid);
-        v.rf_start = rec_p->pos;
-        v.rf_len = rec_p->rlen;
-
-        /*
-        clog << chr_name << "\t" << v.rf_start << "\t" << v.rf_len << "\t";
-        clog << "n_allele=" << rec_p->n_allele << "\t";
-        for (int i = 0; i < rec_p->n_allele; ++i)
-            clog << rec_p->d.allele[i] << ",";
-        clog << "\t";
-
-        clog << "dat_size=" << dat_size << "\t" << dat[0] << ":" << dat[1] << "\t";
-        if (bcf_gt_is_missing(dat[0]))
-            clog << ".";
-        else
-            clog << bcf_gt_allele(dat[0]);
-        if (bcf_gt_is_phased(dat[1]))
-            clog << "|";
-        else
-            clog << "/";
-        if (bcf_gt_is_missing(dat[1]))
-            clog << ".";
-        else
-            clog << bcf_gt_allele(dat[1]);
-        clog << endl;
-        */
-
-        if (global::chr_phase_m.count(chr_name) > 0
-            or n_gt != 2
-            or bcf_gt_is_missing(dat[0])
-            or bcf_gt_is_missing(dat[1])
-            //or not bcf_gt_is_phased(dat[1])
-            or bcf_gt_allele(dat[0]) == bcf_gt_allele(dat[1]))
+        Het_Variation v(hdr_p, rec_p, dat, dat_size);
+        if (not v.is_valid() or global::chr_phase_m.count(v.chr_name()) > 0)
         {
             continue;
         }
-
-        {
-            char * seq;
-            int seq_size;
-            seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
-                                  v.rf_start - global::flank_len, v.rf_start - 1,
-                                  &seq_size);
-            v.flank_seq[0] = seq;
-            free(seq);
-            seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
-                                  v.rf_start + v.rf_len, v.rf_start + v.rf_len + global::flank_len - 1,
-                                  &seq_size);
-            v.flank_seq[1] = seq;
-            free(seq);
-        }
-        for (int i = 0; i < rec_p->n_allele; ++i)
-        {
-            v.allele_seq_v.emplace_back(rec_p->d.allele[i]);
-        }
-        for (int i = 0; i < 2; ++i)
-        {
-            v.gt[i] = bcf_gt_allele(dat[i]);
-        }
-        v.is_phased = bcf_gt_is_phased(dat[1]);
-        v.is_snp = (v.allele_seq_v[0].size() == 1
-                    and v.allele_seq_v[v.gt[0]].size() == 1
-                    and v.allele_seq_v[v.gt[1]].size() == 1);
-        if (not v.is_phased)
-        {
-            // assign a random phase
-            int flip_phase = lrand48() % 2;
-            if (flip_phase) swap(v.gt[0], v.gt[1]);
-        }
-        LOG("variations", debug) << chr_name << "\t" << v;
-        auto res = global::var_m[chr_name].insert(move(v));
+        LOG("variations", debug) << v << endl;
+        auto res = global::var_m[v.chr_name()].insert(move(v));
         if (not res.second)
         {
-            cerr << "duplicate variation:\n" << chr_name << "\t" << v;
+            cerr << "duplicate variation:\n" << v << endl;
             exit(EXIT_FAILURE);
         }
     }
@@ -281,9 +187,10 @@ void print_variations(ostream& os)
 
 int get_phase_snp(const Mapping & m, const Het_Variation & v)
 {
-    assert(m.rf_start() <= v.rf_start and v.rf_start + v.rf_len <= m.rf_start() + m.rf_len());
+    assert(v.is_snp());
+    assert(m.rf_start() <= v.rf_start() and v.rf_end() <= m.rf_start() + m.rf_len());
     // compute the mapped range, on query, of the single reference position
-    auto rg = m.cigar().mapped_range(make_pair(v.rf_start - m.rf_start(), v.rf_start - m.rf_start() + 1), true);
+    auto rg = m.cigar().mapped_range(make_pair(v.rf_start() - m.rf_start(), v.rf_start() - m.rf_start() + 1), true);
     if (rg.second != rg.first + 1)
     {
         // the changed reference base is mapped to something other than a match; we give up
@@ -293,9 +200,9 @@ int get_phase_snp(const Mapping & m, const Het_Variation & v)
     {
         // the changed reference base is mapped to seq[rg.first]
         assert(0 <= rg.first and rg.second <= static_cast< int >(m.seq().size()));
-        if (m.seq()[rg.first] == v.allele_seq_v[v.gt[0]][0])
+        if (m.seq()[rg.first] == v.allele_seq(v.gt(0))[0])
             return 0;
-        else if (m.seq()[rg.first] == v.allele_seq_v[v.gt[1]][0])
+        else if (m.seq()[rg.first] == v.allele_seq(v.gt(1))[0])
             return 1;
         else
             return -1;
@@ -310,9 +217,13 @@ int get_phase_indel(const Mapping &, const Het_Variation &)
 int get_phase(const Mapping & m, const Het_Variation & v)
 {
     // for now, only deal with SNPs
-    return v.is_snp
+    int res = v.is_snp()
         ? get_phase_snp(m, v)
         : get_phase_indel(m, v);
+    // update counts
+    ++v.frag_total;
+    if (res >= 0) ++v.frag_supp_allele[res];
+    return res;
 }
 
 void close_out_map_files();
@@ -552,11 +463,13 @@ int process_mapping(bam1_t * rec_p)
         else
         {
             // compute range of variations spanned by this mapping
-            Het_Variation search_key;
-            search_key.rf_start = m.rf_start();
-            auto it_start = global::var_m.at(m.chr_name()).lower_bound(search_key);
-            search_key.rf_start = m.rf_start() + m.rf_len();
-            auto it_end = global::var_m.at(m.chr_name()).lower_bound(search_key);
+            auto it_start = global::var_m.at(m.chr_name()).lower_bound(Het_Variation(m.rf_start()));
+            while (it_start != global::var_m.at(m.chr_name()).begin()
+                   and prev(it_start)->rf_end() > m.rf_start())
+            {
+                --it_start;
+            }
+            auto it_end = global::var_m.at(m.chr_name()).lower_bound(Het_Variation(m.rf_end()));
             if (it_start != it_end)
             {
                 // mapping spans at least one het
@@ -645,35 +558,46 @@ void process_mappings()
 void print_stats(ostream & os)
 {
     os
-        << "num_in_map_total: " << global::num_in_map_total << endl
-        << "num_in_map_nonprimary: " << global::num_in_map_nonprimary << endl
-        << "num_in_map_unpaired: " << global::num_in_map_unpaired << endl
-        << "num_in_map_unpaired_unmapped: " << global::num_in_map_unpaired_unmapped << endl
-        << "num_in_map_unpaired_mapped: " << global::num_in_map_unpaired_mapped << endl
-        << "num_in_map_paired: " << global::num_in_map_paired << endl
-        << "num_in_map_paired_unmapped: " << global::num_in_map_paired_unmapped << endl
-        << "num_in_map_paired_mapped: " << global::num_in_map_paired_mapped << endl
-        << "num_in_map_paired_both_unmapped: " << global::num_in_map_paired_both_unmapped << endl
-        << "num_in_map_paired_both_mapped: " << global::num_in_map_paired_both_mapped << endl
-        << "num_in_map_paired_both_mapped_diff_chr: " << global::num_in_map_paired_both_mapped_diff_chr << endl
+        << "input_mappings: " << global::num_in_map_total << endl
+        << "..nonprimary: " << global::num_in_map_nonprimary << endl
+        << "..unpaired: " << global::num_in_map_unpaired << endl
+        << "....unmapped: " << global::num_in_map_unpaired_unmapped << endl
+        << "....mapped: " << global::num_in_map_unpaired_mapped << endl
+        << "..paired: " << global::num_in_map_paired << endl
+        << "....unmapped: " << global::num_in_map_paired_unmapped << endl
+        << "....mapped: " << global::num_in_map_paired_mapped << endl
+        << "....both_unmapped: " << global::num_in_map_paired_both_unmapped << endl
+        << "....both_mapped: " << global::num_in_map_paired_both_mapped << endl
+        << "......diff_chr: " << global::num_in_map_paired_both_mapped_diff_chr << endl
 
-        << "num_out_map_unpaired_total: " << global::num_out_map_unpaired_total << endl
-        << "num_out_map_unpaired_inconclusive: " << global::num_out_map_unpaired_inconclusive << endl
-        << "num_out_map_unpaired_random: " << global::num_out_map_unpaired_random << endl
-        << "num_out_map_unpaired_phased: " << global::num_out_map_unpaired_phased << endl
+        << "output_mappings: " << global::num_out_map_total << endl
+        << "..unpaired: " << global::num_out_map_unpaired_total << endl
+        << "....inconclusive: " << global::num_out_map_unpaired_inconclusive << endl
+        << "....random: " << global::num_out_map_unpaired_random << endl
+        << "....phased: " << global::num_out_map_unpaired_phased << endl
 
-        << "num_out_frag_total: " << global::num_out_frag_total << endl
-        << "num_out_frag_conflicting: " << global::num_out_frag_conflicting << endl
-        << "num_out_frag_inconclusive: " << global::num_out_frag_inconclusive << endl
-        << "num_out_frag_random: " << global::num_out_frag_random << endl
-        << "num_out_frag_single_sided: " << global::num_out_frag_single_sided << endl
-        << "num_out_frag_concordant: " << global::num_out_frag_concordant << endl
-        << "num_out_frag_missing_unmapped: " << global::num_out_frag_missing_unmapped << endl
-        << "num_out_frag_missing_mapped: " << global::num_out_frag_missing_mapped << endl
+        << "..paired_fragments: " << global::num_out_frag_total << endl
+        << "....conflicting: " << global::num_out_frag_conflicting << endl
+        << "....inconclusive: " << global::num_out_frag_inconclusive << endl
+        << "....random: " << global::num_out_frag_random << endl
+        << "....single_sided: " << global::num_out_frag_single_sided << endl
+        << "....concordant: " << global::num_out_frag_concordant << endl
+        << "....missing_unmapped: " << global::num_out_frag_missing_unmapped << endl
+        << "....missing_mapped: " << global::num_out_frag_missing_mapped << endl
 
-        << "num_out_map_total: " << global::num_out_map_total << endl
-        << "num_out_map_preset: " << global::num_out_map_preset << endl
+        << "..preset: " << global::num_out_map_preset << endl
         ;
+}
+
+void print_var_stats(ostream & os)
+{
+    for (const auto & s : global::var_m)
+    {
+        for(const auto & v : s.second)
+        {
+            os << v << endl;
+        }
+    }
 }
 
 void real_main()
@@ -684,6 +608,11 @@ void real_main()
     //print_variations(clog);
     process_mappings();
     print_stats(cout);
+    if (not global::var_stats_fn.get().empty())
+    {
+        strict_fstream::fstream tmp_fs(global::var_stats_fn, ios_base::out);
+        print_var_stats(tmp_fs);
+    }
     // cleanup
     fai_destroy(global::faidx_p);
 }
