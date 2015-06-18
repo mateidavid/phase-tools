@@ -344,6 +344,10 @@ void close_out_map_files()
         // close files
         hts_close(global::crt_out_map_file_p[0]);
         hts_close(global::crt_out_map_file_p[1]);
+        global::crt_out_map_file_p[0] = nullptr;
+        global::crt_out_map_file_p[1] = nullptr;
+        LOG("main", info) << "closed output files for chr=[" << global::crt_chr << "]" << endl;
+        global::crt_chr.clear();
     }
 }
 
