@@ -27,22 +27,6 @@ public:
         {
             _rf_start = rec_p->pos;
             _rf_len = rec_p->rlen;
-            /*
-            {
-                char * seq;
-                int seq_size;
-                seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
-                                      v.rf_start - global::flank_len, v.rf_start - 1,
-                                      &seq_size);
-                v.flank_seq[0] = seq;
-                free(seq);
-                seq = faidx_fetch_seq(global::faidx_p, chr_name.c_str(),
-                                      v.rf_start + v.rf_len, v.rf_start + v.rf_len + global::flank_len - 1,
-                                      &seq_size);
-                v.flank_seq[1] = seq;
-                free(seq);
-            }
-            */
             for (int i = 0; i < rec_p->n_allele; ++i)
             {
                 _allele_seq_v.emplace_back(rec_p->d.allele[i]);
@@ -80,6 +64,22 @@ public:
     bool is_valid() const { return _is_valid; }
     bool is_phased() const { return _is_phased; }
     bool is_snp() const { return _is_snp; }
+
+    void load_flanks(const faidx_t * faidx_p, int len)
+    {
+        char * seq;
+        int seq_size;
+        seq = faidx_fetch_seq(faidx_p, chr_name().c_str(),
+                              rf_start() - len, rf_start() - 1,
+                              &seq_size);
+        _flank_seq[0] = seq;
+        free(seq);
+        seq = faidx_fetch_seq(faidx_p, chr_name().c_str(),
+                              rf_end(), rf_end() + len - 1,
+                              &seq_size);
+        _flank_seq[1] = seq;
+        free(seq);
+    }
 
     friend bool operator < (const Het_Variation& lhs, const Het_Variation& rhs)
     {

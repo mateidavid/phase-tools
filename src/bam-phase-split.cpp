@@ -18,6 +18,7 @@
 #include "Het_Variation.hpp"
 #include "Cigar.hpp"
 #include "Mapping.hpp"
+#include "overlapper.h"
 
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION "missing_version"
@@ -54,8 +55,9 @@ namespace global
     //
     // other parameters
     //
+    ValueArg< string > chr("", "chr", "Process single chromosome.", false, "", "chr", cmd_parser);
     MultiArg< string > chr_phase("", "chr-phase", "Assign all mappings to this chr to given phase.", false, "chr:[01]", cmd_parser);
-    ValueArg< int > flank_len("", "flank_len", "Flank length [10].", false, 10, "int", cmd_parser);
+    ValueArg< int > flank_len("", "flank_len", "Flank length [20].", false, 20, "int", cmd_parser);
 
     // reference
     faidx_t * faidx_p;
@@ -66,6 +68,8 @@ namespace global
     // input mappings
     htsFile * map_file_p;
     bam_hdr_t * map_hdr_p;
+    hts_idx_t * map_idx_p;
+    hts_itr_t * map_itr_p;
     // output mappings
     string crt_chr;
     htsFile * crt_out_map_file_p[2];
@@ -101,6 +105,7 @@ namespace global
 
     size_t num_out_map_total;
     size_t num_out_map_preset;
+    size_t indel_phasing_neither_flank;
 } // namespace global
 
 void set_chr_phase_m()
@@ -152,6 +157,7 @@ void load_variations()
         {
             continue;
         }
+        v.load_flanks(global::faidx_p, global::flank_len);
         LOG("variations", debug) << v << endl;
         auto res = global::var_m[v.chr_name()].insert(move(v));
         if (not res.second)
@@ -190,7 +196,7 @@ int get_phase_snp(const Mapping & m, const Het_Variation & v)
     assert(v.is_snp());
     assert(m.rf_start() <= v.rf_start() and v.rf_end() <= m.rf_start() + m.rf_len());
     // compute the mapped range, on query, of the single reference position
-    auto rg = m.cigar().mapped_range(make_pair(v.rf_start() - m.rf_start(), v.rf_start() - m.rf_start() + 1), true);
+    auto rg = m.cigar().mapped_range(make_pair(v.rf_start() - m.rf_start(), v.rf_start() - m.rf_start() + 1), true, true);
     if (rg.second != rg.first + 1)
     {
         // the changed reference base is mapped to something other than a match; we give up
@@ -209,9 +215,72 @@ int get_phase_snp(const Mapping & m, const Het_Variation & v)
     }
 }
 
-int get_phase_indel(const Mapping &, const Het_Variation &)
+int get_phase_indel(const Mapping & m, const Het_Variation & v)
 {
-    return -1;
+    // We first estimate the mapping of the query to the flanking regions of the
+    // indel.
+    // delta = estimate of the max indel size in flank mapping
+    // We use delta to compute a band limit for the DP.
+    pair< int, int > rf_rg[2];
+    pair< int, int > qr_rg[2];
+    int delta[2];
+    assert(v.rf_start() <= m.rf_end());
+    assert(m.rf_start() <= v.rf_end());
+    rf_rg[0] = make_pair(max(v.rf_start() - global::flank_len - m.rf_start(), 0),
+                         max(v.rf_start() - m.rf_start(), 0));
+    rf_rg[1] = make_pair(min(v.rf_end() - m.rf_start(), m.rf_len()),
+                         min(v.rf_end() + global::flank_len - m.rf_start(), m.rf_len()));
+    qr_rg[0] = m.cigar().mapped_range(rf_rg[0], true, false);
+    qr_rg[1] = m.cigar().mapped_range(rf_rg[1], true, false);
+    delta[0] = abs((qr_rg[0].second - qr_rg[0].first) - (rf_rg[0].second - rf_rg[0].first));
+    delta[1] = abs((qr_rg[1].second - qr_rg[1].first) - (rf_rg[1].second - rf_rg[1].first));
+
+    DNA_Sequence rf_allele[2];
+    rf_allele[0] = v.flank_seq(0) + v.allele_seq(v.gt(0)) + v.flank_seq(1);
+    rf_allele[1] = v.flank_seq(0) + v.allele_seq(v.gt(1)) + v.flank_seq(1);
+    int max_allele_seq_size = max(v.allele_seq(v.gt(0)).size(), v.allele_seq(v.gt(1)).size());
+    DNA_Sequence qr;
+    bool anchor_head = true;
+    int band_width;
+    if (rf_rg[0].second - rf_rg[0].first == global::flank_len
+        and (rf_rg[1].second - rf_rg[1].first < global::flank_len
+             or delta[0] < delta[1]))
+    {
+        // use 5p flank
+        int qr_end = qr_rg[0].second;
+        qr_end = min(qr_end + max_allele_seq_size + global::flank_len, static_cast< int >(m.seq().size()));
+        qr = m.seq().substr(qr_rg[0].first, qr_end - qr_rg[0].first);
+        anchor_head = true;
+        band_width = delta[0];
+    }
+    else if (rf_rg[1].second - rf_rg[1].first == global::flank_len)
+    {
+        // use 3p flank
+        int qr_start = qr_rg[1].first;
+        qr_start = max(qr_start - max_allele_seq_size - global::flank_len, 0);
+        qr = m.seq().substr(qr_start, qr_rg[1].second - qr_start);
+        anchor_head = false;
+        band_width = delta[1];
+    }
+    else
+    {
+        // neither flank is fully captured by the mapping, we give up
+        ++global::indel_phasing_neither_flank;
+        return -1;
+    }
+    SequenceOverlap res;
+    int score[2];
+    res = Overlapper::extendMatch(rf_allele[0], qr,
+                                  (anchor_head? 0 : rf_allele[0].size() - 1),
+                                  (anchor_head? 0 : qr.size() - 1),
+                                  band_width);
+    score[0] = res.score;
+    res = Overlapper::extendMatch(rf_allele[1], qr,
+                                  (anchor_head? 0 : rf_allele[1].size() - 1),
+                                  (anchor_head? 0 : qr.size() - 1),
+                                  band_width);
+    score[1] = res.score;
+    return (score[0] == score[1]? -1 : (score[0] > score[1]? 0 : 1));
 }
 
 int get_phase(const Mapping & m, const Het_Variation & v)
@@ -542,9 +611,34 @@ void process_mappings()
 {
     global::map_file_p = hts_open(global::map_fn.get().c_str(), "r");
     global::map_hdr_p = sam_hdr_read(global::map_file_p);
-
     bam1_t * rec_p = bam_init1();
-    while (sam_read1(global::map_file_p, global::map_hdr_p, rec_p) >= 0)
+    std::function< int(void) > get_next_record;
+
+    if (global::chr.get().empty())
+    {
+        // traverse entire file
+        get_next_record = [&] () { return sam_read1(global::map_file_p, global::map_hdr_p, rec_p); };
+    }
+    else
+    {
+        // traverse given chromosome only
+        global::map_idx_p = sam_index_load(global::map_file_p, global::map_fn.get().c_str());
+        if (not global::map_idx_p)
+        {
+            cerr << "could not load BAM index for [" << global::map_fn.get() << "]" << endl;
+            exit(EXIT_FAILURE);
+        }
+        int tid = bam_name2id(global::map_hdr_p, global::chr.get().c_str());
+        if (tid < 0)
+        {
+            cerr << "chromosome [" << global::chr.get() << "] not found in BAM header" << endl;
+            exit(EXIT_FAILURE);
+        }
+        global::map_itr_p = sam_itr_queryi(global::map_idx_p, tid, 0, numeric_limits< int >::max());
+        get_next_record = [&] () { return sam_itr_next(global::map_file_p, global::map_itr_p, rec_p); };
+    }
+
+    while (get_next_record() >= 0)
     {
         int res = process_mapping(rec_p);
         if (res == 1)
@@ -552,8 +646,10 @@ void process_mappings()
             rec_p = bam_init1();
         }
     }
-    bam_destroy1(rec_p);
 
+    if (global::map_itr_p) hts_itr_destroy(global::map_itr_p);
+    if (global::map_idx_p) hts_idx_destroy(global::map_idx_p);
+    bam_destroy1(rec_p);
     close_out_map_files();
     bam_hdr_destroy(global::map_hdr_p);
     hts_close(global::map_file_p);
@@ -595,11 +691,24 @@ void print_stats(ostream & os)
 
 void print_var_stats(ostream & os)
 {
-    for (const auto & s : global::var_m)
+    if (global::chr.get().empty())
     {
-        for(const auto & v : s.second)
+        for (const auto & s : global::var_m)
         {
-            os << v << endl;
+            for(const auto & v : s.second)
+            {
+                os << v << endl;
+            }
+        }
+    }
+    else
+    {
+        if (global::var_m.count(global::chr))
+        {
+            for (const auto & v : global::var_m.at(global::chr))
+            {
+                os << v << endl;
+            }
         }
     }
 }

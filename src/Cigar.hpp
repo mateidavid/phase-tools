@@ -91,12 +91,14 @@ public:
      * Given a range @rg of offsets on reference if @on_ref, else on query,
      * compute the mapped range of offsets under the cigar mapping.
      */
-    std::pair< int, int > mapped_range(const std::pair< int, int >& rg, bool on_ref) const
+    std::pair< int, int > mapped_range(const std::pair< int, int >& rg, bool on_ref,
+                                       bool include_end_indels) const
     {
         assert(rg.first <= rg.second);
         auto rg_start_pos = advance_pos(start_pos(), rg.first, on_ref);
+        if (not include_end_indels) rg_start_pos = advance_pos(rg_start_pos, 0, on_ref);
         auto rg_end_pos = advance_pos(rg_start_pos, rg.second - rg.first, on_ref);
-        rg_end_pos = advance_pos(rg_end_pos, 0, on_ref);
+        if (include_end_indels) rg_end_pos = advance_pos(rg_end_pos, 0, on_ref);
         return on_ref
             ? std::make_pair(rg_start_pos.qr_offset, rg_end_pos.qr_offset)
             : std::make_pair(rg_start_pos.rf_offset, rg_end_pos.rf_offset);

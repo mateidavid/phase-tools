@@ -158,11 +158,16 @@ add_custom_target(version ALL
 #    add_subdirectory(${dir})
 #endforeach()
 
-add_executable(bam-phase-split bam-phase-split.cpp)
+add_executable(bam-phase-split
+    bam-phase-split.cpp
+    overlapper.cpp
+    )
 target_link_libraries(bam-phase-split
     ${HTSlib_LIBRARY}
     ${ZLIB_LIBRARIES}
-)
-add_dependencies(bam-phase-split version)
+    )
+add_dependencies(bam-phase-split
+    version
+    )
 
 file(COPY add-parent-phasing DESTINATION .)
