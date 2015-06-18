@@ -1,7 +1,7 @@
 find_package(Git)
 
 if(GIT_FOUND)
-    execute_process(COMMAND ${GIT_EXECUTABLE} describe --always
+    execute_process(COMMAND ${GIT_EXECUTABLE} describe --tags --always
         WORKING_DIRECTORY ${SRC_ROOT}
         OUTPUT_VARIABLE VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
     )
