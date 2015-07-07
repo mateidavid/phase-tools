@@ -8,6 +8,8 @@
 
 #include "RC_Sequence.hpp"
 
+class Phased_Set;
+
 class Het_Variation
 {
 public:
@@ -104,6 +106,7 @@ public:
 
     mutable size_t frag_total;
     mutable size_t frag_supp_allele[2];
+    mutable Phased_Set * phased_set_ptr;
 
 private:
     std::string _chr_name;

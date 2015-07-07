@@ -170,4 +170,16 @@ add_dependencies(bam-phase-split
     version
     )
 
+add_executable(ngs-phase
+    ngs-phase.cpp
+    overlapper.cpp
+    )
+target_link_libraries(ngs-phase
+    ${HTSlib_LIBRARY}
+    ${ZLIB_LIBRARIES}
+    )
+add_dependencies(ngs-phase
+    version
+    )
+
 file(COPY add-parent-phasing DESTINATION .)
