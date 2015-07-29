@@ -70,9 +70,7 @@ namespace global
     htsFile * map_file_p;
     bam_hdr_t * map_hdr_p;
     hts_idx_t * map_idx_p;
-    hts_itr_t * map_itr_p;
     // output mappings
-    string crt_chr;
     htsFile * crt_out_map_file_p[2];
     // mate pair decision
     map< string, tuple< const Mapping *, int, vector< pair< const Het_Variation *, int > > > > mp_store_m;
@@ -301,22 +299,16 @@ int get_phase(const Mapping & m, const Het_Variation & v)
 void close_out_map_files();
 void open_out_map_files(const string&);
 
-void implement_decision(const Mapping * m_p, const string& chr_name, int decision, vector< pair< const Het_Variation *, int > > decision_v)
+void implement_decision(const Mapping * m_p, int decision, vector< pair< const Het_Variation *, int > > decision_v)
 {
     assert(decision == 0 or decision == 1);
     ++global::num_out_map_total;
 
-    if (global::crt_chr != chr_name)
-    {
-        // new chromosome
-        close_out_map_files();
-        open_out_map_files(chr_name);
-    }
     if (not global::decision_fn.get().empty())
     {
         global::decision_ofs
             << m_p->query_name() << '\t'
-            << chr_name << '\t'
+            << m_p->chr_name() << '\t'
             << decision << '\t';
         bool first = true;
         for (const auto & p : decision_v)
@@ -402,49 +394,36 @@ string get_out_map_fn(const string& chr_name, int phase)
     return os.str();
 }
 
-void close_out_map_files()
+void close_out_map_files(const string & chr_name)
 {
-    assert((global::crt_out_map_file_p[0] != nullptr) == (global::crt_out_map_file_p[1] != nullptr));
-    if (not global::crt_out_map_file_p[0] and not global::mp_store_m.empty())
+    assert(global::crt_out_map_file_p[0] and global::crt_out_map_file_p[1]);
+    // first, flush any paired reads that are currently stored
+    for (const auto & p : global::mp_store_m)
     {
-        // there are mappings to flush, open output files first
-        assert(global::crt_chr.empty());
-        const Mapping * m_p = get<0>(global::mp_store_m.begin()->second);
-        open_out_map_files(m_p->chr_name());
-    }
-    if (global::crt_out_map_file_p[0])
-    {
-        assert(not global::crt_chr.empty());
-        // first, flush any paired reads that are currently stored
-        for (const auto & p : global::mp_store_m)
+        const Mapping * m_p;
+        int decision;
+        vector< pair< const Het_Variation *, int > > decision_v;
+        tie(m_p, decision, decision_v) = p.second;
+        if (not m_p)
         {
-            //bam1_t * rec_p;
-            const Mapping * m_p;
-            int decision;
-            vector< pair< const Het_Variation *, int > > decision_v;
-            tie(m_p, decision, decision_v) = p.second;
-            if (not m_p)
-            {
-                ++global::num_out_frag_missing_unmapped;
-            }
-            else
-            {
-                ++global::num_out_frag_missing_mapped;
-                decision = get_paired_decision(decision, -2);
-                implement_decision(m_p, global::crt_chr, decision, decision_v);
-                bam_destroy1(m_p->rec_p());
-                delete m_p;
-            }
+            ++global::num_out_frag_missing_unmapped;
         }
-        global::mp_store_m.clear();
-        // close files
-        hts_close(global::crt_out_map_file_p[0]);
-        hts_close(global::crt_out_map_file_p[1]);
-        global::crt_out_map_file_p[0] = nullptr;
-        global::crt_out_map_file_p[1] = nullptr;
-        LOG("main", info) << "closed output files for chr=[" << global::crt_chr << "]" << endl;
-        global::crt_chr.clear();
+        else
+        {
+            ++global::num_out_frag_missing_mapped;
+            decision = get_paired_decision(decision, -2);
+            implement_decision(m_p, decision, decision_v);
+            bam_destroy1(m_p->rec_p());
+            delete m_p;
+        }
     }
+    global::mp_store_m.clear();
+    // close files
+    hts_close(global::crt_out_map_file_p[0]);
+    hts_close(global::crt_out_map_file_p[1]);
+    global::crt_out_map_file_p[0] = nullptr;
+    global::crt_out_map_file_p[1] = nullptr;
+    LOG("main", info) << "closed output files for chr=[" << chr_name << "]" << endl;
 }
 
 void open_out_map_files(const string& chr_name)
@@ -464,7 +443,6 @@ void open_out_map_files(const string& chr_name)
         cerr << "error in sam_hdr_write(): status=" << res << endl;
         exit(EXIT_FAILURE);
     }
-    global::crt_chr = chr_name;
     LOG("main", info) << "opened output files for chr=[" << chr_name << "]" << endl;
 }
 
@@ -592,7 +570,7 @@ int process_mapping(bam1_t * rec_p)
     if (not m.treat_as_paired())
     {
         decision = get_unpaired_decision(decision);
-        implement_decision(&m, m.chr_name(), decision, decision_v);
+        implement_decision(&m, decision, decision_v);
         return 0;
     }
     else
@@ -604,7 +582,7 @@ int process_mapping(bam1_t * rec_p)
                 // paired & 1st & 1st mapped & 2nd unmapped
                 // => implement decision & store it
                 decision = get_paired_decision(decision, -2);
-                implement_decision(&m, m.chr_name(), decision, decision_v);
+                implement_decision(&m, decision, decision_v);
                 global::mp_store_m[m.query_name()] = make_tuple(nullptr, decision, decision_v);
                 return 0;
             }
@@ -625,8 +603,8 @@ int process_mapping(bam1_t * rec_p)
             {
                 // decision for 1st read was deferred
                 int frag_decision = get_paired_decision(decision, mp_decision);
-                implement_decision(mp_m_p, m.chr_name(), frag_decision, mp_decision_v);
-                implement_decision(&m, m.chr_name(), frag_decision, decision_v);
+                implement_decision(mp_m_p, frag_decision, mp_decision_v);
+                implement_decision(&m, frag_decision, decision_v);
                 bam_destroy1(mp_m_p->rec_p());
                 delete mp_m_p;
                 return 0;
@@ -635,44 +613,26 @@ int process_mapping(bam1_t * rec_p)
             {
                 // decision for 1st read was not deferred
                 assert(m.is_paired() and m.mp_is_mapped() and not m.is_mapped() and decision_v.empty());
-                implement_decision(&m, m.mp_chr_name(), mp_decision, decision_v);
+                implement_decision(&m, mp_decision, decision_v);
                 return 0;
             }
         }
     }
 }
 
-void process_mappings()
+void process_mappings_chromosome(const string & chr_name)
 {
-    global::map_file_p = hts_open(global::map_fn.get().c_str(), "r");
-    global::map_hdr_p = sam_hdr_read(global::map_file_p);
     bam1_t * rec_p = bam_init1();
-    std::function< int(void) > get_next_record;
-
-    if (global::chr.get().empty())
+    int tid = bam_name2id(global::map_hdr_p, chr_name.c_str());
+    if (tid < 0)
     {
-        // traverse entire file
-        get_next_record = [&] () { return sam_read1(global::map_file_p, global::map_hdr_p, rec_p); };
+        cerr << "chromosome [" << chr_name << "] not found in BAM header" << endl;
+        exit(EXIT_FAILURE);
     }
-    else
-    {
-        // traverse given chromosome only
-        global::map_idx_p = sam_index_load(global::map_file_p, global::map_fn.get().c_str());
-        if (not global::map_idx_p)
-        {
-            cerr << "could not load BAM index for [" << global::map_fn.get() << "]" << endl;
-            exit(EXIT_FAILURE);
-        }
-        int tid = bam_name2id(global::map_hdr_p, global::chr.get().c_str());
-        if (tid < 0)
-        {
-            cerr << "chromosome [" << global::chr.get() << "] not found in BAM header" << endl;
-            exit(EXIT_FAILURE);
-        }
-        global::map_itr_p = sam_itr_queryi(global::map_idx_p, tid, 0, numeric_limits< int >::max());
-        get_next_record = [&] () { return sam_itr_next(global::map_file_p, global::map_itr_p, rec_p); };
-    }
+    auto map_itr_p = sam_itr_queryi(global::map_idx_p, tid, 0, numeric_limits< int >::max());
+    auto get_next_record = [&] () { return sam_itr_next(global::map_file_p, map_itr_p, rec_p); };
 
+    open_out_map_files(chr_name);
     while (get_next_record() >= 0)
     {
         int res = process_mapping(rec_p);
@@ -681,11 +641,34 @@ void process_mappings()
             rec_p = bam_init1();
         }
     }
+    close_out_map_files(chr_name);
 
-    if (global::map_itr_p) hts_itr_destroy(global::map_itr_p);
-    if (global::map_idx_p) hts_idx_destroy(global::map_idx_p);
+    hts_itr_destroy(map_itr_p);
     bam_destroy1(rec_p);
-    close_out_map_files();
+}
+
+void process_mappings()
+{
+    global::map_file_p = hts_open(global::map_fn.get().c_str(), "r");
+    global::map_hdr_p = sam_hdr_read(global::map_file_p);
+    global::map_idx_p = sam_index_load(global::map_file_p, global::map_fn.get().c_str());
+    if (not global::map_idx_p)
+    {
+        cerr << "could not load BAM index for [" << global::map_fn.get() << "]" << endl;
+        exit(EXIT_FAILURE);
+    }
+    if (global::chr.get().empty())
+    {
+        for (int i = 0; i < global::map_hdr_p->n_targets; ++i)
+        {
+            process_mappings_chromosome(string(global::map_hdr_p->target_name[i]));
+        }
+    }
+    else
+    {
+        process_mappings_chromosome(global::chr);
+    }
+    hts_idx_destroy(global::map_idx_p);
     bam_hdr_destroy(global::map_hdr_p);
     hts_close(global::map_file_p);
 }
