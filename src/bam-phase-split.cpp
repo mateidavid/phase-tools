@@ -313,7 +313,14 @@ void implement_decision(const Mapping * m_p, int decision, vector< pair< const H
         bool first = true;
         for (const auto & p : decision_v)
         {
-            global::decision_ofs << (not first? ";" : "") << p.first->rf_start() + 1 << ':' << p.second;
+            global::decision_ofs << (not first? ";" : "") << p.first->rf_start() + 1;
+            first = false;
+        }
+        global::decision_ofs << '\t';
+        first = true;
+        for (const auto & p : decision_v)
+        {
+            global::decision_ofs << (not first? ";" : "") << p.second;
             first = false;
         }
         global::decision_ofs << endl;
