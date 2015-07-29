@@ -760,19 +760,17 @@ int main(int argc, char * argv[])
     global::cmd_parser.parse(argc, argv);
     // set log levels
     Logger::set_levels_from_options(global::log_level, &clog);
-    // set random seed
-    bool random_seed = false;
-    if (global::seed < 0)
-    {
-        global::seed.get() = time(nullptr);
-        random_seed = true;
-    }
-    srand48(global::seed);
     // print options
     LOG("main", info) << "program: " << global::cmd_parser.getProgramName() << endl;
     LOG("main", info) << "version: " << global::cmd_parser.getVersion() << endl;
     LOG("main", info) << "args: " << global::cmd_parser.getOrigArgv() << endl;
-    if (random_seed) LOG("main", info) << "seed: " << global::seed << endl;
+    // set random seed
+    if (global::seed < 0)
+    {
+        global::seed.get() = time(nullptr);
+        LOG("main", info) << "seed: " << global::seed << endl;
+    }
+    srand48(global::seed);
     // real main
     if (not global::decision_fn.get().empty())
     {
