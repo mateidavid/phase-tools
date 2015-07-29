@@ -405,6 +405,13 @@ string get_out_map_fn(const string& chr_name, int phase)
 void close_out_map_files()
 {
     assert((global::crt_out_map_file_p[0] != nullptr) == (global::crt_out_map_file_p[1] != nullptr));
+    if (not global::crt_out_map_file_p[0] and not global::mp_store_m.empty())
+    {
+        // there are mappings to flush, open output files first
+        assert(global::crt_chr.empty());
+        const Mapping * m_p = get<0>(global::mp_store_m.begin()->second);
+        open_out_map_files(m_p->chr_name());
+    }
     if (global::crt_out_map_file_p[0])
     {
         assert(not global::crt_chr.empty());
@@ -605,7 +612,8 @@ int process_mapping(bam1_t * rec_p)
             {
                 // paired & 1st & (1st unmapped or 2nd mapped)
                 // => defer decision
-                global::mp_store_m[m.query_name()] = make_tuple(new Mapping(move(m)), decision, decision_v);
+                string query_name = m.query_name();
+                global::mp_store_m[query_name] = make_tuple(new Mapping(move(m)), decision, decision_v);
                 return 1;
             }
         }
