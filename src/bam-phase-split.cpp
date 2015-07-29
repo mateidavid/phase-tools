@@ -58,6 +58,7 @@ namespace global
     ValueArg< string > chr("", "chr", "Process single chromosome.", false, "", "chr", cmd_parser);
     MultiArg< string > chr_phase("", "chr-phase", "Assign all mappings to this chr to given phase.", false, "chr:[01]", cmd_parser);
     ValueArg< int > flank_len("", "flank_len", "Flank length [20].", false, 20, "int", cmd_parser);
+    ValueArg< string > decision_fn("", "decision", "File to log decision.", false, "", "file", cmd_parser);
 
     // reference
     faidx_t * faidx_p;
@@ -74,7 +75,9 @@ namespace global
     string crt_chr;
     htsFile * crt_out_map_file_p[2];
     // mate pair decision
-    map< string, pair< bam1_t *, int > > mp_store_m;
+    map< string, tuple< const Mapping *, int, vector< pair< const Het_Variation *, int > > > > mp_store_m;
+    // decision log
+    strict_fstream::ofstream decision_ofs;
 
     // counts
     size_t num_in_map_total;
@@ -298,7 +301,7 @@ int get_phase(const Mapping & m, const Het_Variation & v)
 void close_out_map_files();
 void open_out_map_files(const string&);
 
-void implement_decision(const bam1_t * rec_p, const string& chr_name, int decision)
+void implement_decision(const Mapping * m_p, const string& chr_name, int decision, vector< pair< const Het_Variation *, int > > decision_v)
 {
     assert(decision == 0 or decision == 1);
     ++global::num_out_map_total;
@@ -309,7 +312,21 @@ void implement_decision(const bam1_t * rec_p, const string& chr_name, int decisi
         close_out_map_files();
         open_out_map_files(chr_name);
     }
-    int res = sam_write1(global::crt_out_map_file_p[decision], global::map_hdr_p, rec_p);
+    if (not global::decision_fn.get().empty())
+    {
+        global::decision_ofs
+            << m_p->query_name() << '\t'
+            << chr_name << '\t'
+            << decision << '\t';
+        bool first = true;
+        for (const auto & p : decision_v)
+        {
+            global::decision_ofs << (not first? ";" : "") << p.first->rf_start() + 1 << ':' << p.second;
+            first = false;
+        }
+        global::decision_ofs << endl;
+    }
+    int res = sam_write1(global::crt_out_map_file_p[decision], global::map_hdr_p, m_p->rec_p());
     if (res < 0)
     {
         cerr << "error in sam_write1(): status=" << res << endl;
@@ -394,10 +411,12 @@ void close_out_map_files()
         // first, flush any paired reads that are currently stored
         for (const auto & p : global::mp_store_m)
         {
-            bam1_t * rec_p;
+            //bam1_t * rec_p;
+            const Mapping * m_p;
             int decision;
-            tie(rec_p, decision) = p.second;
-            if (not rec_p)
+            vector< pair< const Het_Variation *, int > > decision_v;
+            tie(m_p, decision, decision_v) = p.second;
+            if (not m_p)
             {
                 ++global::num_out_frag_missing_unmapped;
             }
@@ -405,8 +424,9 @@ void close_out_map_files()
             {
                 ++global::num_out_frag_missing_mapped;
                 decision = get_paired_decision(decision, -2);
-                implement_decision(rec_p, global::crt_chr, decision);
-                bam_destroy1(rec_p);
+                implement_decision(m_p, global::crt_chr, decision, decision_v);
+                bam_destroy1(m_p->rec_p());
+                delete m_p;
             }
         }
         global::mp_store_m.clear();
@@ -452,16 +472,18 @@ int process_mapping(bam1_t * rec_p)
     Mapping m(global::map_hdr_p, rec_p);
     bool mp_stored = global::mp_store_m.count(m.query_name()) > 0;
     assert(not mp_stored or m.treat_as_paired());
-    bam1_t * mp_rec_p = nullptr;
+    //bam1_t * mp_rec_p = nullptr;
+    const Mapping * mp_m_p = nullptr;
     int mp_decision = -2;
+    vector< pair< const Het_Variation *, int > > mp_decision_v;
     if (mp_stored)
     {
-        tie(mp_rec_p, mp_decision) = global::mp_store_m.at(m.query_name());
+        tie(mp_m_p, mp_decision, mp_decision_v) = global::mp_store_m.at(m.query_name());
     }
     LOG("mappings", debug)
         << m << "\t"
         << (mp_stored? "mp_stored" : "mp_not_stored") << "\t"
-        << (mp_stored? (mp_rec_p? "non_null_rec" : "null_rec") : "") << "\t"
+        << (mp_stored? (mp_m_p? "non_null_rec" : "null_rec") : "") << "\t"
         << (mp_stored? mp_decision : -5) << "\t"
         << endl;
 
@@ -518,6 +540,7 @@ int process_mapping(bam1_t * rec_p)
 
     // compute decision for current mapping
     int decision;
+    vector< pair< const Het_Variation *, int > > decision_v;
     if (not m.is_mapped())
     {
         decision = -2; // unmapped
@@ -546,8 +569,11 @@ int process_mapping(bam1_t * rec_p)
             if (it_start != it_end)
             {
                 // mapping spans at least one het
-                // for now: compute phasing using only first het
-                decision = get_phase(m, *it_start);
+                for (auto it = it_start; it != it_end; ++it)
+                {
+                    decision_v.push_back(make_pair(&*it, get_phase(m, *it)));
+                }
+                decision = decision_v.front().second;
             }
             else
             {
@@ -559,7 +585,7 @@ int process_mapping(bam1_t * rec_p)
     if (not m.treat_as_paired())
     {
         decision = get_unpaired_decision(decision);
-        implement_decision(rec_p, m.chr_name(), decision);
+        implement_decision(&m, m.chr_name(), decision, decision_v);
         return 0;
     }
     else
@@ -571,15 +597,15 @@ int process_mapping(bam1_t * rec_p)
                 // paired & 1st & 1st mapped & 2nd unmapped
                 // => implement decision & store it
                 decision = get_paired_decision(decision, -2);
-                implement_decision(rec_p, m.chr_name(), decision);
-                global::mp_store_m[m.query_name()] = make_pair(nullptr, decision);
+                implement_decision(&m, m.chr_name(), decision, decision_v);
+                global::mp_store_m[m.query_name()] = make_tuple(nullptr, decision, decision_v);
                 return 0;
             }
             else
             {
                 // paired & 1st & (1st unmapped or 2nd mapped)
                 // => defer decision
-                global::mp_store_m[m.query_name()] = make_pair(rec_p, decision);
+                global::mp_store_m[m.query_name()] = make_tuple(new Mapping(move(m)), decision, decision_v);
                 return 1;
             }
         }
@@ -587,20 +613,21 @@ int process_mapping(bam1_t * rec_p)
         {
             // paired & 2nd
             global::mp_store_m.erase(m.query_name());
-            if (mp_rec_p)
+            if (mp_m_p)
             {
                 // decision for 1st read was deferred
                 int frag_decision = get_paired_decision(decision, mp_decision);
-                implement_decision(mp_rec_p, m.chr_name(), frag_decision);
-                implement_decision(rec_p, m.chr_name(), frag_decision);
-                bam_destroy1(mp_rec_p);
+                implement_decision(mp_m_p, m.chr_name(), frag_decision, mp_decision_v);
+                implement_decision(&m, m.chr_name(), frag_decision, decision_v);
+                bam_destroy1(mp_m_p->rec_p());
+                delete mp_m_p;
                 return 0;
             }
             else
             {
                 // decision for 1st read was not deferred
-                assert(m.is_paired() and m.mp_is_mapped() and not m.is_mapped());
-                implement_decision(rec_p, m.mp_chr_name(), mp_decision);
+                assert(m.is_paired() and m.mp_is_mapped() and not m.is_mapped() and decision_v.empty());
+                implement_decision(&m, m.mp_chr_name(), mp_decision, decision_v);
                 return 0;
             }
         }
@@ -749,5 +776,13 @@ int main(int argc, char * argv[])
     LOG("main", info) << "args: " << global::cmd_parser.getOrigArgv() << endl;
     if (random_seed) LOG("main", info) << "seed: " << global::seed << endl;
     // real main
+    if (not global::decision_fn.get().empty())
+    {
+        global::decision_ofs.open(global::decision_fn);
+    }
     real_main();
+    if (not global::decision_fn.get().empty())
+    {
+        global::decision_ofs.close();
+    }
 }

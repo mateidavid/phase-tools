@@ -35,6 +35,7 @@ public:
         }
     }
 
+    bam1_t * rec_p() const { return _rec_p; }
     bool is_paired() const { return _flag & BAM_FPAIRED; }
     bool is_primary() const { return not (_flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)); }
     bool is_mapped() const { return not (_flag & BAM_FUNMAP); }
