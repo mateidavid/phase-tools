@@ -50,6 +50,7 @@ public:
             frag_total = 0;
             frag_supp_allele[0] = 0;
             frag_supp_allele[1] = 0;
+            frag_conflicting = 0;
         }
     }
 
@@ -100,12 +101,14 @@ public:
            << (v.is_snp()? "snp" : "indel") << "\t"
            << v.frag_total << "\t"
            << v.frag_supp_allele[0] << "\t" << v.frag_supp_allele[1] << "\t"
-           << (v.frag_total - (v.frag_supp_allele[0] + v.frag_supp_allele[1]));
+           << (v.frag_total - (v.frag_supp_allele[0] + v.frag_supp_allele[1]))
+           << v.frag_conflicting;
         return os;
     }
 
     mutable size_t frag_total;
     mutable size_t frag_supp_allele[2];
+    mutable size_t frag_conflicting;
     mutable Phased_Set * phased_set_ptr;
 
 private:
@@ -121,6 +124,16 @@ private:
     bool _is_snp; // true iff all of (potentially 3) alleles: ref, gt[0], gt[1] are length 1
 
 }; // class Het_Variation
+
+struct Het_Variation_Ptr_Comp
+{
+    bool operator () (const Het_Variation * lhs, const Het_Variation * rhs) const
+    {
+        if (!lhs) return true;
+        else if (!rhs) return false;
+        else return *lhs < *rhs;
+    }
+}; // struct Het_Variation_Ptr_Comp
 
 #endif
 

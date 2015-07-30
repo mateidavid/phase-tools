@@ -609,9 +609,26 @@ int process_mapping(bam1_t * rec_p)
             if (mp_m_p)
             {
                 // decision for 1st read was deferred
+                // merge decision vectors:
+                map< const Het_Variation *, int, Het_Variation_Ptr_Comp > decision_m(
+                    decision_v.begin(), decision_v.end());
+                for (const auto & p : mp_decision_v)
+                {
+                    if (decision_m.count(p.first) == 0)
+                    {
+                        decision_m.insert(p);
+                    }
+                    else if (decision_m[p.first] != p.second)
+                    {
+                        ++(p.first->frag_conflicting);
+                        //decision_m.erase(p.first); //TODO: remove these
+                        decision_m[p.first] = 2;
+                    }
+                }
+                decltype(decision_v) merged_decision_v(decision_m.begin(), decision_m.end());
                 int frag_decision = get_paired_decision(decision, mp_decision);
-                implement_decision(mp_m_p, frag_decision, mp_decision_v);
-                implement_decision(&m, frag_decision, decision_v);
+                implement_decision(mp_m_p, frag_decision, merged_decision_v);
+                implement_decision(&m, frag_decision, merged_decision_v);
                 bam_destroy1(mp_m_p->rec_p());
                 delete mp_m_p;
                 return 0;
@@ -620,7 +637,7 @@ int process_mapping(bam1_t * rec_p)
             {
                 // decision for 1st read was not deferred
                 assert(m.is_paired() and m.mp_is_mapped() and not m.is_mapped() and decision_v.empty());
-                implement_decision(&m, mp_decision, decision_v);
+                implement_decision(&m, mp_decision, mp_decision_v);
                 return 0;
             }
         }
