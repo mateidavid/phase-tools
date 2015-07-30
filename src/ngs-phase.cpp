@@ -51,7 +51,6 @@ namespace global
     MultiArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "file", cmd_parser);
     //ValueArg< string > out_map_fn("", "out", "Output file prefix. Files names will be <prefix>.<chr>.[01].bam", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
-    ValueArg< string > var_stats_fn("", "var-stats", "Variations stats file.", false, "", "file", cmd_parser);
     //
     // other parameters
     //
@@ -595,14 +594,6 @@ void real_main()
             process_chromosome(p.first);
         }
     }
-    /*
-    print_stats(cout);
-    if (not global::var_stats_fn.get().empty())
-    {
-        strict_fstream::fstream tmp_fs(global::var_stats_fn, ios_base::out);
-        print_var_stats(tmp_fs);
-    }
-    */
     // cleanup
     fai_destroy(global::faidx_p);
 }
@@ -612,19 +603,17 @@ int main(int argc, char * argv[])
     global::cmd_parser.parse(argc, argv);
     // set log levels
     Logger::set_levels_from_options(global::log_level, &clog);
-    // set random seed
-    bool random_seed = false;
-    if (global::seed < 0)
-    {
-        global::seed.get() = time(nullptr);
-        random_seed = true;
-    }
-    srand48(global::seed);
     // print options
     LOG("main", info) << "program: " << global::cmd_parser.getProgramName() << endl;
     LOG("main", info) << "version: " << global::cmd_parser.getVersion() << endl;
     LOG("main", info) << "args: " << global::cmd_parser.getOrigArgv() << endl;
-    if (random_seed) LOG("main", info) << "seed: " << global::seed << endl;
+    // set random seed
+    if (global::seed < 0)
+    {
+        global::seed.get() = time(nullptr);
+        LOG("main", info) << "seed: " << global::seed << endl;
+    }
+    srand48(global::seed);
     // real main
     real_main();
 }
