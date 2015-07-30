@@ -49,7 +49,7 @@ namespace global
     ValueArg< string > ref_fn("", "ref", "Reference (Fasta) file.", true, "", "file", cmd_parser);
     ValueArg< string > var_fn("", "var", "Variants (VCF) file.", true, "", "file", cmd_parser);
     MultiArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "file", cmd_parser);
-    //ValueArg< string > out_map_fn("", "out", "Output file prefix. Files names will be <prefix>.<chr>.[01].bam", true, "", "file", cmd_parser);
+    ValueArg< string > out_var_fn("", "out", "Output variations file", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
     //
     // other parameters
@@ -58,6 +58,8 @@ namespace global
     MultiArg< string > skip_chr("", "skip-chr", "Skip chromosome.", false, "chr", cmd_parser);
     ValueArg< int > flank_len("", "flank_len", "Flank length [20].", false, 20, "int", cmd_parser);
     ValueArg< double > max_discordance("", "max-discordance", "Maximum discordance for connecting phase sets [.1].", false, .1, "float", cmd_parser);
+    ValueArg< string > gt_tag("", "gt-tag", "GT tag.", false, "GT_ngs", "string", cmd_parser);
+    ValueArg< string > ps_tag("", "ps-tag", "PS tag.", false, "PS_ngs", "string", cmd_parser);
 
     // reference
     faidx_t * faidx_p;
@@ -139,9 +141,8 @@ void load_variations()
     while (bcf_read1(f_p, hdr_p, rec_p) >= 0)
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
-        Het_Variation v(hdr_p, rec_p, dat, dat_size);
-        if (not v.is_valid()
-            or global::skip_chr_s.count(v.chr_name()) > 0)
+        Het_Variation v(hdr_p, rec_p, dat, dat_size, 1, 0);
+        if (not v.is_valid() or global::skip_chr_s.count(v.chr_name()) > 0)
         {
             continue;
         }
@@ -166,6 +167,75 @@ void load_variations()
         exit(ret);
     }
     LOG("main", info) << "load_variations(): end" << endl;
+}
+
+void modify_bcf_record(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size,
+                       int n_samples, int sample_idx)
+{
+    Het_Variation v2(hdr_p, rec_p, dat, dat_size, n_samples, sample_idx);
+    if (not v2.is_valid()) return;
+    if (not global::chr.get().empty() and v2.chr_name() != global::chr.get()) return;
+    auto it = global::var_m[v2.chr_name()].find(Het_Variation(v2.rf_start()));
+    if (it == global::var_m[v2.chr_name()].end())
+    {
+        LOG("main", warning) << "did not find the following variation loaded during output:" << endl
+                             << v2 << endl;
+        return;
+    }
+    const Het_Variation & v = *it;
+    // update genotypes
+    ostringstream oss;
+    oss << v.gt(v.phase) << '|' << v.gt(1 - v.phase);
+    const char * s = oss.str().c_str();
+    bcf_update_format_string(hdr_p, rec_p, "GT_ngs", &s, 1);
+    // update PS field
+    bcf_update_format_int32(hdr_p, rec_p, "PS_ngs", &v.ps_start_1, 1);
+}
+
+void output_variations()
+{
+    int ret;
+    auto if_p = bcf_open(global::var_fn.get().c_str(), "r");
+    auto hdr_p = bcf_hdr_read(if_p);
+    auto rec_p = bcf_init1();
+    auto of_p = bcf_open(global::out_var_fn.get().c_str(), "wb");
+    int * dat = nullptr;
+    int dat_size = 0;
+    // restrict processing to given sample_id
+    ret = bcf_hdr_set_samples(hdr_p, global::sample_id.get().c_str(), 0);
+    if (ret != 0)
+    {
+        cerr << "bcf_hdr_set_samples() error: status=" << ret << endl;
+        exit(1);
+    }
+    /*
+    int n_samples = bcf_hdr_nsamples(hdr_p);
+    int sample_idx = 0;
+    while (sample_idx < n_samples and global::sample_id.get() != hdr_p->samples[sample_idx]) ++sample_idx;
+    assert(sample_idx < n_samples);
+    */
+
+    // write out new header
+    string tmp_str = string("##FORMAT=<ID=") + global::gt_tag.get() + ",Number=1,Type=String,Description=\"Genotype\">";
+    bcf_hdr_append(hdr_p, tmp_str.c_str());
+    tmp_str = string("##FORMAT=<ID=") + global::ps_tag.get() + ",Number=1,Type=String,Description=\"Genotype\">";
+    bcf_hdr_append(hdr_p, tmp_str.c_str());
+    bcf_hdr_write(of_p, hdr_p);
+
+    // transform output file
+    while (bcf_read1(if_p, hdr_p, rec_p) >= 0)
+    {
+        bcf_unpack(rec_p, BCF_UN_ALL);
+        modify_bcf_record(hdr_p, rec_p, dat, dat_size, 1, 0);
+        bcf_write1(of_p, hdr_p, rec_p);
+    }
+
+    // destroy structures and close file
+    if (dat) free(dat);
+    bcf_destroy1(rec_p);
+    bcf_hdr_destroy(hdr_p);
+    bcf_close(of_p);
+    bcf_close(if_p);
 }
 
 void print_variations(ostream& os)
@@ -507,10 +577,12 @@ void process_chromosome(const string & chr)
     for (const auto & v : global::var_m[chr])
     {
         Phased_Set & ps = *v.phased_set_ptr;
-        bool phase = ps.het_set().find(make_pair(&v, false)) == ps.het_set().end();
-        size_t ps_start = ps.het_set().begin()->first->rf_start();
+        v.phase = ps.het_set().find(make_pair(&v, false)) == ps.het_set().end();
+        v.ps_start_1 = ps.het_set().begin()->first->rf_start() + 1;
+        /*
         cout << chr << '\t' << v.rf_start() + 1 << '\t' << ps_start + 1 << '\t'
              << v.gt(phase) << '|' << v.gt(1 - phase) << endl;
+        */
     }
 
     // clear intrusive structure (the rest are cleared automatically)
@@ -594,6 +666,7 @@ void real_main()
             process_chromosome(p.first);
         }
     }
+    output_variations();
     // cleanup
     fai_destroy(global::faidx_p);
 }

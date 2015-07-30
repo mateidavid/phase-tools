@@ -17,14 +17,17 @@ public:
 
     Het_Variation() = default;
     Het_Variation(int rf_start) : _rf_start(rf_start) {}
-    Het_Variation(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size)
+    Het_Variation(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size,
+                  int n_samples, int sample_idx)
     {
-        _n_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
         _chr_name = bcf_hdr_id2name(hdr_p, rec_p->rid);
-        _is_valid = (_n_gt == 2
-                     and not bcf_gt_is_missing(dat[0])
-                     and not bcf_gt_is_missing(dat[1])
-                     and bcf_gt_allele(dat[0]) != bcf_gt_allele(dat[1]));
+        int total_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
+        _n_gt = total_gt / n_samples;
+        _is_valid = (_n_gt >= 2
+                     and not bcf_gt_is_missing(dat[sample_idx * _n_gt + 0])
+                     and not bcf_gt_is_missing(dat[sample_idx * _n_gt + 1])
+                     and bcf_gt_allele(dat[sample_idx * _n_gt + 0]) != bcf_gt_allele(dat[sample_idx * _n_gt + 1])
+                     and (_n_gt == 2 or dat[sample_idx * _n_gt + 2] == bcf_int32_vector_end));
         if (_is_valid)
         {
             _rf_start = rec_p->pos;
@@ -35,9 +38,9 @@ public:
             }
             for (int i = 0; i < 2; ++i)
             {
-                _gt[i] = bcf_gt_allele(dat[i]);
+                _gt[i] = bcf_gt_allele(dat[sample_idx * _n_gt + i]);
             }
-            _is_phased = bcf_gt_is_phased(dat[1]);
+            _is_phased = bcf_gt_is_phased(dat[sample_idx * _n_gt + 1]);
             _is_snp = (_allele_seq_v[0].size() == 1
                        and _allele_seq_v[_gt[0]].size() == 1
                        and _allele_seq_v[_gt[1]].size() == 1);
@@ -110,6 +113,8 @@ public:
     mutable size_t frag_supp_allele[2];
     mutable size_t frag_conflicting;
     mutable Phased_Set * phased_set_ptr;
+    mutable int phase;
+    mutable int ps_start_1;
 
 private:
     std::string _chr_name;

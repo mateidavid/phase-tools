@@ -153,7 +153,7 @@ void load_variations()
     while (bcf_read1(f_p, hdr_p, rec_p) >= 0)
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
-        Het_Variation v(hdr_p, rec_p, dat, dat_size);
+        Het_Variation v(hdr_p, rec_p, dat, dat_size, 1, 0);
         if (not v.is_valid() or global::chr_phase_m.count(v.chr_name()) > 0)
         {
             continue;
