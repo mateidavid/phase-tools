@@ -385,7 +385,7 @@ void process_mapping(const Mapping & m)
         // not spanning any hets
         return;
     }
-    // mapping spans at least one het
+    // mapping spans at least 1 het
     auto & fm = global::frag_store_m[m.query_name()];
     for (auto it = it_start; it != it_end; ++it)
     {
@@ -393,6 +393,10 @@ void process_mapping(const Mapping & m)
         int phase = get_phase(m, v);
         if (phase >= 0)
         {
+            LOG("phasing", debug1)
+                << "fragment [" << m.query_name()
+                << "] observes variation [" << v.chr_name() << ":" << v.rf_start() + 1 << "] phase ["
+                << phase << "]" << endl;
             if (fm.count(&v))
             {
                 if (phase != fm[&v])
@@ -492,6 +496,10 @@ void process_chromosome(const string & chr)
                 ps1_phase = (v1_phase + ps1_phase) % 2;
                 ps2_phase = (v2_phase + ps2_phase) % 2;
                 // now, ps1:ps1_phase to ps2:ps2_phase
+                LOG("phasing", debug1)
+                    << "fragment [" << p.first << "] connects ["
+                    << ps1 << ":" << ps1_phase << "] with ["
+                    << ps2 << ":" << ps2_phase << "]" << endl;
                 Phased_Set_Connection * cp = nullptr;
                 if (conn_map[&ps1].count(&ps2) == 0)
                 {
@@ -520,6 +528,7 @@ void process_chromosome(const string & chr)
     {
         // pick connection with smallest discordance
         Phased_Set_Connection & c = *conn_set.begin();
+        LOG("phasing", debug1) << "connection with smallest discordance: " << c << endl;
         // stop if smallest discordance is too large
         if (c.discordance() > global::max_discordance) break;
         // connect phased sets according to the current connection
@@ -567,18 +576,22 @@ void process_chromosome(const string & chr)
             conn_map[ps3_ptr][ps1_ptr] = new_cp;
         }
         conn_map.erase(ps2_ptr);
+        LOG("phasing", debug1) << "merged phased set: " << *ps1_ptr << endl;
+    }
+    if (Logger::get_facility_level("phasing") >= Logger::level::debug1)
+    {
+        for (const auto & c : conn_set)
+        {
+            LOG("phasing", debug1) << "discarded connection: " << c << endl;
+        }
     }
 
     // output
     for (const auto & v : global::var_m[chr])
     {
         Phased_Set & ps = *v.phased_set_ptr;
-        v.phase = ps.het_set().find(make_pair(&v, false)) == ps.het_set().end();
+        v.ps_phase = ps.het_set().find(make_pair(&v, false)) == ps.het_set().end();
         v.ps_start_1 = ps.het_set().begin()->first->rf_start() + 1;
-        /*
-        cout << chr << '\t' << v.rf_start() + 1 << '\t' << ps_start + 1 << '\t'
-             << v.gt(phase) << '|' << v.gt(1 - phase) << endl;
-        */
     }
 
     // clear intrusive structure (the rest are cleared automatically)
