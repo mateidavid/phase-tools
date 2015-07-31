@@ -409,10 +409,6 @@ void process_mapping(const Mapping & m)
             }
         }
     }
-    if (fm.empty() or fm.size() == 1)
-    {
-        global::frag_store_m.erase(m.query_name());
-    }
 }
 
 void process_mappings(const string & fn, const string & chr)
