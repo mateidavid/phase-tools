@@ -146,6 +146,7 @@ void load_variations()
         {
             continue;
         }
+        v.reset_phase();
         v.load_flanks(global::faidx_p, global::flank_len);
         LOG("variations", debug) << v << endl;
         auto res = global::var_m[v.chr_name()].insert(move(v));

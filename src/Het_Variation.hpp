@@ -71,6 +71,7 @@ public:
     bool is_valid() const { return _is_valid; }
     bool is_phased() const { return _is_phased; }
     bool is_snp() const { return _is_snp; }
+    void reset_phase() { _is_phased = false; if (_gt[0] > _gt[1]) std::swap(_gt[0], _gt[1]); }
 
     void load_flanks(const faidx_t * faidx_p, int len)
     {
