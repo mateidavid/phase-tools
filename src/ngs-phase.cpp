@@ -170,70 +170,91 @@ void load_variations()
     LOG("main", info) << "load_variations(): end" << endl;
 }
 
-void modify_bcf_record(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size)
-{
-    Het_Variation v2(hdr_p, rec_p, dat, dat_size, false);
-    if (not v2.is_valid()) return;
-    if (not global::chr.get().empty() and v2.chr_name() != global::chr.get()) return;
-    auto it = global::var_m[v2.chr_name()].find(Het_Variation(v2.rf_start()));
-    if (it == global::var_m[v2.chr_name()].end())
-    {
-        LOG("main", warning) << "did not find the following variation loaded during output:" << endl
-                             << v2 << endl;
-        return;
-    }
-    const Het_Variation & v = *it;
-    // update genotypes
-    ostringstream oss;
-    oss << v.gt(v.phase) << '|' << v.gt(1 - v.phase);
-    const char * s = oss.str().c_str();
-    bcf_update_format_string(hdr_p, rec_p, "GT_ngs", &s, 1);
-    // update PS field
-    bcf_update_format_int32(hdr_p, rec_p, "PS_ngs", &v.ps_start_1, 1);
-}
-
 void output_variations()
 {
     int ret;
     auto if_p = bcf_open(global::var_fn.get().c_str(), "r");
-    auto hdr_p = bcf_hdr_read(if_p);
-    auto rec_p = bcf_init1();
     auto of_p = bcf_open(global::out_var_fn.get().c_str(), "wb");
+    auto ihdr_p = bcf_hdr_read(if_p);
+    auto ohdr_p = bcf_hdr_init("w");
+    auto irec_p = bcf_init1();
     int * dat = nullptr;
     int dat_size = 0;
+    int odat[2];
     // restrict processing to given sample_id
-    ret = bcf_hdr_set_samples(hdr_p, global::sample_id.get().c_str(), 0);
+    ret = bcf_hdr_set_samples(ihdr_p, global::sample_id.get().c_str(), 0);
     if (ret != 0)
     {
         cerr << "bcf_hdr_set_samples() error: status=" << ret << endl;
         exit(1);
     }
-    /*
-    int n_samples = bcf_hdr_nsamples(hdr_p);
-    int sample_idx = 0;
-    while (sample_idx < n_samples and global::sample_id.get() != hdr_p->samples[sample_idx]) ++sample_idx;
-    assert(sample_idx < n_samples);
-    */
 
     // write out new header
-    string tmp_str = string("##FORMAT=<ID=") + global::gt_tag.get() + ",Number=1,Type=String,Description=\"Genotype\">";
-    bcf_hdr_append(hdr_p, tmp_str.c_str());
-    tmp_str = string("##FORMAT=<ID=") + global::ps_tag.get() + ",Number=1,Type=String,Description=\"Genotype\">";
-    bcf_hdr_append(hdr_p, tmp_str.c_str());
-    bcf_hdr_write(of_p, hdr_p);
+    bcf_hdr_append(ohdr_p, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
+    bcf_hdr_append(ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
+    int n_seqs;
+    auto seq_names = bcf_hdr_seqnames(ihdr_p, &n_seqs);
+    for (int i = 0; i < n_seqs; ++i)
+    {
+        auto hrec_p = bcf_hdr_get_hrec(ihdr_p, BCF_HL_CTG, "ID", seq_names[i], nullptr);
+        bcf_hdr_add_hrec(ohdr_p, bcf_hrec_dup(hrec_p));
+    }
+    free(seq_names);
+    bcf_hdr_add_sample(ohdr_p, global::sample_id.get().c_str());
+    bcf_hdr_add_sample(ohdr_p, nullptr); //???
+    bcf_hdr_write(of_p, ohdr_p);
+
+    // set orec defaults
+    /*
+    bcf_unpack(orec_p, BCF_UN_ALL);
+    orec_p->qual = 0;
+    bcf_update_id(ohdr_p, orec_p, nullptr);
+    bcf_update_filter(ohdr_p, orec_p, nullptr, 0);
+    */
 
     // transform output file
-    while (bcf_read1(if_p, hdr_p, rec_p) >= 0)
+    while (bcf_read1(if_p, ihdr_p, irec_p) >= 0)
     {
-        bcf_unpack(rec_p, BCF_UN_ALL);
-        modify_bcf_record(hdr_p, rec_p, dat, dat_size);
-        bcf_write1(of_p, hdr_p, rec_p);
+        bcf_unpack(irec_p, BCF_UN_ALL);
+        Het_Variation v2(ihdr_p, irec_p, dat, dat_size, false);
+        if (not v2.is_valid()
+            or (not global::chr.get().empty() and v2.chr_name() != global::chr.get()))
+        {
+            continue;
+        }
+        auto it = global::var_m[v2.chr_name()].find(Het_Variation(v2.rf_start()));
+        if (it == global::var_m[v2.chr_name()].end())
+        {
+            LOG("main", warning) << "did not find the following variation loaded during output:" << endl
+                                 << v2 << endl;
+            continue;
+        }
+        const Het_Variation & v = *it;
+        // update output record
+        auto orec_p = bcf_init1();
+        orec_p->rid = bcf_hdr_name2id(ohdr_p, v.chr_name().c_str());
+        orec_p->pos = irec_p->pos;
+        ostringstream oss;
+        for (size_t i = 0; i < v.n_alleles(); ++i)
+        {
+            oss << (i > 0? "," : "") << v.allele_seq(i);
+        }
+        bcf_update_alleles_str(ohdr_p, orec_p, oss.str().c_str());
+        // update GT
+        odat[0] = bcf_gt_phased(v.gt(v.ps_phase));
+        odat[1] = bcf_gt_phased(v.gt(1 - v.ps_phase));
+        bcf_update_genotypes(ohdr_p, orec_p, odat, 2);
+        // update PS
+        bcf_update_format_int32(ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
+        bcf_write1(of_p, ohdr_p, orec_p);
+        bcf_destroy1(orec_p);
     }
 
     // destroy structures and close file
     if (dat) free(dat);
-    bcf_destroy1(rec_p);
-    bcf_hdr_destroy(hdr_p);
+    bcf_destroy1(irec_p);
+    bcf_hdr_destroy(ohdr_p);
+    bcf_hdr_destroy(ihdr_p);
     bcf_close(of_p);
     bcf_close(if_p);
 }
