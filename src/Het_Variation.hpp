@@ -108,7 +108,7 @@ public:
            << (v.is_snp()? "snp" : "indel") << "\t"
            << v.frag_total << "\t"
            << v.frag_supp_allele[0] << "\t" << v.frag_supp_allele[1] << "\t"
-           << (v.frag_total - (v.frag_supp_allele[0] + v.frag_supp_allele[1]))
+           << (v.frag_total - (v.frag_supp_allele[0] + v.frag_supp_allele[1])) << "\t"
            << v.frag_conflicting;
         return os;
     }

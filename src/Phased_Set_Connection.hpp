@@ -92,10 +92,15 @@ public:
 
     friend std::ostream& operator << (std::ostream& os, const Phased_Set_Connection& c)
     {
+        /*
         os << static_cast< const void * >(c.ps_ptr(0)) << '\t'
            << static_cast< const void * >(c.ps_ptr(1)) << '\t'
            << c.count(0, 0) << '\t' << c.count(0, 1) << '\t' << c.count(1, 0) << '\t' << c.count(1, 1) << '\t'
            << c.discordance() << std::endl;
+        */
+        os << *c.ps_ptr(0) << ',' << *c.ps_ptr(1) << ':'
+           << c.count(0, 0) << ',' << c.count(0, 1) << ',' << c.count(1, 0) << ',' << c.count(1, 1) << ':'
+           << c.discordance();
         return os;
     }
 

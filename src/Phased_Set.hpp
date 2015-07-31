@@ -41,13 +41,17 @@ public:
 
     friend std::ostream& operator << (std::ostream& os, const Phased_Set& s)
     {
+        os << "(";
         for (const auto & p : s.het_set())
         {
             const auto & v = *p.first;
             bool orientation = p.second;
-            os << v.chr_name() << '\t' << v.rf_start() << '\t' << v.rf_end() << '\t'
-               << v.gt(orientation) << '|' << v.gt(1 - orientation) << std::endl;
+            //os << v.chr_name() << '\t' << v.rf_start() << '\t' << v.rf_end() << '\t'
+            //   << v.gt(orientation) << '|' << v.gt(1 - orientation) << std::endl;
+            os << (&p != &*s.het_set().begin()? "," : "")
+               << v.chr_name() << ":" << v.rf_start() + 1 << ":" << orientation;
         }
+        os << ")";
         return os;
     }
 
