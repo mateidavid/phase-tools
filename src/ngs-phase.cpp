@@ -57,7 +57,7 @@ namespace global
     ValueArg< string > chr("", "chr", "Process single chromosome.", false, "", "chr", cmd_parser);
     MultiArg< string > skip_chr("", "skip-chr", "Skip chromosome.", false, "chr", cmd_parser);
     ValueArg< int > flank_len("", "flank_len", "Flank length [20].", false, 20, "int", cmd_parser);
-    ValueArg< double > max_discordance("", "max-discordance", "Maximum discordance for connecting phase sets [.1].", false, .1, "float", cmd_parser);
+    ValueArg< double > max_discordance("", "max-discordance", "Maximum discordance for connecting phase sets [.2].", false, .2, "float", cmd_parser);
     ValueArg< string > gt_tag("", "gt-tag", "GT tag.", false, "GT_ngs", "string", cmd_parser);
     ValueArg< string > ps_tag("", "ps-tag", "PS tag.", false, "PS_ngs", "string", cmd_parser);
 
