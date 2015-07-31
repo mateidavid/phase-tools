@@ -55,6 +55,8 @@ public:
             frag_supp_allele[0] = 0;
             frag_supp_allele[1] = 0;
             frag_conflicting = 0;
+            ps_phase = 0;
+            ps_start_1 = rf_start() + 1;
         }
     }
 
@@ -115,7 +117,7 @@ public:
     mutable size_t frag_supp_allele[2];
     mutable size_t frag_conflicting;
     mutable Phased_Set * phased_set_ptr;
-    mutable int phase;
+    mutable int ps_phase;
     mutable int ps_start_1;
 
 private:
