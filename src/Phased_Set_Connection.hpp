@@ -111,8 +111,16 @@ private:
 
     void recompute_discordance()
     {
-        _discordance = (1.0 + std::min(_count[0][0] + _count[1][1], _count[0][1] + _count[1][0])) /
-            (1.0 + _count[0][0] + _count[1][1] + _count[0][1] + _count[1][0]);
+        size_t denom = _count[0][0] + _count[1][1] + _count[0][1] + _count[1][0];
+        if (denom == 0)
+        {
+            _discordance = 1;
+        }
+        else
+        {
+            _discordance = static_cast< double >(std::min(_count[0][0] + _count[1][1], _count[0][1] + _count[1][0])) /
+                denom;
+        }
     }
 }; // class Phased_Set_Connection
 
