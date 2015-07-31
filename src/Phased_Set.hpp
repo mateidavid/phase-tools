@@ -16,7 +16,9 @@ struct Phased_Set_Comparator
     bool operator () (const std::pair< const Het_Variation *, bool > & lhs,
                       const std::pair< const Het_Variation *, bool > & rhs)
     {
-        return *lhs.first < *rhs.first;
+        if (Het_Variation_Ptr_Comp()(lhs.first, rhs.first)) return true;
+        else if (Het_Variation_Ptr_Comp()(rhs.first, lhs.first)) return false;
+        else return lhs.second < rhs.second;
     }
 }; // struct Phased_Set_Comparator
 
