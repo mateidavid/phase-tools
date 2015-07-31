@@ -17,9 +17,10 @@ public:
 
     Het_Variation() = default;
     Het_Variation(int rf_start) : _rf_start(rf_start) {}
-    Het_Variation(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size,
-                  int n_samples, int sample_idx)
+    Het_Variation(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size, bool assign_random_phase)
     {
+        const int n_samples = 1;
+        const int sample_idx = 0;
         _chr_name = bcf_hdr_id2name(hdr_p, rec_p->rid);
         int total_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
         _n_gt = total_gt / n_samples;
@@ -44,7 +45,7 @@ public:
             _is_snp = (_allele_seq_v[0].size() == 1
                        and _allele_seq_v[_gt[0]].size() == 1
                        and _allele_seq_v[_gt[1]].size() == 1);
-            if (not _is_phased)
+            if (not _is_phased and assign_random_phase)
             {
                 // assign a random phase
                 int flip_phase = lrand48() % 2;

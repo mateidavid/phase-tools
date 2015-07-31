@@ -141,7 +141,7 @@ void load_variations()
     while (bcf_read1(f_p, hdr_p, rec_p) >= 0)
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
-        Het_Variation v(hdr_p, rec_p, dat, dat_size, 1, 0);
+        Het_Variation v(hdr_p, rec_p, dat, dat_size, false);
         if (not v.is_valid() or global::skip_chr_s.count(v.chr_name()) > 0)
         {
             continue;
@@ -169,10 +169,9 @@ void load_variations()
     LOG("main", info) << "load_variations(): end" << endl;
 }
 
-void modify_bcf_record(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size,
-                       int n_samples, int sample_idx)
+void modify_bcf_record(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size)
 {
-    Het_Variation v2(hdr_p, rec_p, dat, dat_size, n_samples, sample_idx);
+    Het_Variation v2(hdr_p, rec_p, dat, dat_size, false);
     if (not v2.is_valid()) return;
     if (not global::chr.get().empty() and v2.chr_name() != global::chr.get()) return;
     auto it = global::var_m[v2.chr_name()].find(Het_Variation(v2.rf_start()));
@@ -226,7 +225,7 @@ void output_variations()
     while (bcf_read1(if_p, hdr_p, rec_p) >= 0)
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
-        modify_bcf_record(hdr_p, rec_p, dat, dat_size, 1, 0);
+        modify_bcf_record(hdr_p, rec_p, dat, dat_size);
         bcf_write1(of_p, hdr_p, rec_p);
     }
 
