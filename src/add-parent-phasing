@@ -7,11 +7,6 @@ import logging
 import sys
 import vcf
 
-# format_ps_num = None
-# format_ps_type = 'Integer'
-# format_ps_desc = 'Phase Set'
-cnt = collections.defaultdict(int)
-
 # call_data_fact_dict = dict()
 # def get_call_data_fact(fmt, fmt_l, orig_call_data):
 #     if fmt not in call_data_fact_dict:
@@ -23,141 +18,181 @@ cnt = collections.defaultdict(int)
 #         call_data_fact_dict[fmt] = new_fact
 #     return call_data_fact_dict[fmt]
 
-def process_record():
-    child_call = record.genotype(args.child)
-    if not child_call.is_het:
-        return
-    cnt['het'] += 1
-    parent_call = [record.genotype(p) for p in args.parent]
-    parent_call_gt = [cl['GT'] if cl['GT'] != None else './.' for cl in parent_call]
-    #logging.debug(' '.join([child_call['GT']] + parent_call_gt))
+class Genotype_Triple(object):
+    def __init__(self, record, args):
+        s_l = [args.child] + args.parent
+        self.gt = list()
+        self.ps = list()
+        for s in s_l:
+            c = record.genotype(s)
+            gt = c['GT']
+            if gt == None:
+                self.gt.append([0, 0])
+                self.ps.append(None)
+            else:
+                self.gt.append([int(a) for a in gt.replace('|', '/').split('/')])
+                if 'PS' in c.data._fields:
+                    self.ps.append(c['PS'])
+                else:
+                    self.ps.append(None)
+    def is_het(self):
+        return self.gt[0][0] != self.gt[0][1]
+    def is_triple_diploid(self):
+        return all([len(l) == 2 for l in self.gt])
+    def compute_phase(self):
+        #
+        # parent_support[i][j] == True iff child allele #i is present in parent #j
+        #
+        self.parent_support_matrix = [ [self.gt[0][i] in self.gt[j] for j in [1, 2]]
+                                       for i in [0, 1] ]
+        self.parent_support_count = [sum(ps) for ps in self.parent_support_matrix]
+        #self.parent_support = [or(ps) for ps in self.parent_support_matrix]
+        #
+        # parent_origin[i] == j >= 0, iff child allele #i is present in parent #j but not in parent #(1-j)
+        #                  == -1, if no such j
+        #
+        #self.parent_origin = [int(ps[1]) if sum(ps) == 1 else -1 for ps in self.parent_support_matrix]
+        self.parent_origin = [int(self.parent_support_matrix[i][1]) if self.parent_support_count[i] == 1 else -1
+                              for i in range(2)]
+        #
+        # local_phase[i] == j >= 0, iff either direct_phase[i] == j,
+        #                              or direct_phase[i] == -1 and direct_phase[1-i] == 1-j
+        #                == -1, if no such j
+        #
+        self.derived_parent_origin = list()
+        for i in range(2):
+            if self.parent_origin[i] >= 0:
+                self.derived_parent_origin.append(self.parent_origin[i])
+            elif self.parent_origin[i] < 0 and self.parent_origin[1 - i] >= 0 and self.parent_support_count[i] > 0:
+                self.derived_parent_origin.append(1 - self.parent_origin[1 - i])
+            else:
+                self.derived_parent_origin.append(-1)
+        #
+        # phase == i >= 0, iff child allele #i comes from parent 0
+        #          -1, ow
+        if -1 in self.derived_parent_origin or self.derived_parent_origin[0] == self.derived_parent_origin[1]:
+            self.phase = -1
+        else:
+            assert self.derived_parent_origin[0] >= 0 and self.derived_parent_origin[1] >= 0
+            self.phase = self.derived_parent_origin[0]
 
-    allele_set = list()
-    allele_set.append(child_call['GT'].replace('|', '/').split('/'))
-    allele_set += [cl['GT'].replace('|', '/').split('/') if cl['GT'] != None else ['0', '0']
-                   for cl in parent_call]
-    logging.debug('allele_set: ' + str(allele_set))
+def process_record(record, args):
+    gtt = Genotype_Triple(record, args)
+    if not gtt.is_triple_diploid() or not gtt.is_het():
+        return False
+    args.cnt['het'] += 1
+    gtt.compute_phase()
+    logging.debug('processing [' + record.CHROM + ':' + str(record.POS) + ']: ' + str(gtt.__dict__))
 
-    phase = [-1, -1]
-    for i in range(2):
-        # try to phase i-th child allele
-        parent_support = [int(allele_set[0][i] in parent_alleles) for parent_alleles in allele_set[1:]]
-        if parent_support[0] + parent_support[1] == 0:
-            # neither parent supports this child allele
-            logging.info('zero_parent_support: ' +
-                         str(record) + ' ' + ' '.join([child_call['GT']] + parent_call_gt))
-            cnt['zero_parent_support'] += 1
-            return
-        elif parent_support[0] + parent_support[1] == 1:
-            # unique parent support => phase
-            phase[i] = int(parent_support[1] == 1)
-    if phase[0] == -1 and phase[1] == -1:
-        # neither allele phased
-        cnt['ambiguous_phasing'] += 1
-        return
-    if phase[0] == phase[1]:
-        # both alleles phased to same parent
-        logging.info('double_parent_support: ' +
-                     str(record) + ' ' + ' '.join([child_call['GT']] + parent_call_gt))
-        cnt['double_parent_support'] += 1
-        return
-    if phase[0] != -1 and phase[1] == -1:
-        phase[1] = 1 - phase[0]
-        cnt['imputed_phasing'] += 1
-    elif phase[1] != -1 and phase[0] == -1:
-        phase[0] = 1 - phase[1]
-        cnt['imputed_phasing'] += 1
+    if gtt.phase < 0:
+        if 0 in gtt.parent_support_count:
+            args.cnt['zero_parent_support'] += 1
+        elif 1 not in gtt.parent_support_count:
+            args.cnt['ambiguous_phasing'] += 1
+        elif gtt.derived_parent_origin[0] == gtt.derived_parent_origin[1]:
+            args.cnt['double_parent_support'] += 1
+        else:
+            assert False, "This line shouldn't be reached"
+        return False
     else:
-        cnt['complete_phasing'] += 1
-    if phase[0] == 0:
-        new_gt = '|'.join(allele_set[0])
-    else:
-        new_gt = '|'.join(allele_set[0][::-1])
-    c = record.samples[child_sample_idx]
+        args.cnt['phased'] += 1
+        if -1 in gtt.parent_origin:
+            args.cnt['deduced_phasing'] += 1
+        else:
+            args.cnt['complete_phasing'] += 1
+
+    new_gt = '|'.join((str(a) for a in gtt.gt[0][::[1, -1][gtt.phase]]))
+    c = record.samples[args.child_idx]
     if 'PS' in c.data._fields:
         new_c_data = c.data._replace(GT=new_gt, PS=None)
     else:
         new_c_data = c.data._replace(GT=new_gt)
-    record.samples[child_sample_idx] = vcf.model._Call(record, c.sample, new_c_data)
-    cnt['phased'] += 1
+    record.samples[args.child_idx] = vcf.model._Call(record, c.sample, new_c_data)
+    return True
 
+def print_counters(cnt):
+    print('total records: ' + str(cnt['total_records']), file=sys.stderr)
+    print('  het: ' + str(cnt['het']), file=sys.stderr)
+    print('    allele with zero parent support: ' + str(cnt['zero_parent_support']), file=sys.stderr)
+    print('    both alleles supported by same parent: ' + str(cnt['double_parent_support']), file=sys.stderr)
+    print('    ambiguous phasing: ' + str(cnt['ambiguous_phasing']), file=sys.stderr)
+    print('    phased: ' + str(cnt['phased']), file=sys.stderr)
+    print('      deduced phasing: ' + str(cnt['deduced_phasing']), file=sys.stderr)
+    print('      complete phasing: ' + str(cnt['complete_phasing']), file=sys.stderr)
 
-description = """
-Given a VCF file containing polymorphism calls from a trio of samples, phase child calls using parent genotypes.
-"""
+def real_main(args):
+    # open input file
+    if args.input:
+        vcf_reader = vcf.Reader(filename=args.input)
+    else:
+        vcf_reader = vcf.Reader(fsock=sys.stdin)
+    logging.info('found INFO fields: ' + str([k for k in vcf_reader.infos.keys()]))
+    logging.info('found FORMAT fields: ' + str([k for k in vcf_reader.formats.keys()]))
+    logging.info('found SAMPLES: ' + str(vcf_reader.samples))
+    assert args.child in vcf_reader.samples
+    assert args.parent[0] in vcf_reader.samples
+    assert args.parent[1] in vcf_reader.samples
+    # save index of child
+    args.child_idx = vcf_reader.samples.index(args.child)
+    args.cnt = collections.defaultdict(int)
 
-parser = argparse.ArgumentParser(description=description)
-parser.add_argument('--log-level', dest='log_level',
-                    help='Logging level.')
-parser.add_argument('-i', '--input', action='store', default=None,
-                    help='Input VCF file [stdin].')
-parser.add_argument('-o', '--output', action='store', default=None,
-                    help='Output VCF file [stdout].')
-parser.add_argument('--child', action='store', required=True,
-                    help='Child sample ID.')
-parser.add_argument('--parent', action='store', required=True, nargs=2,
-                    help='Parent sample IDs.')
-args = parser.parse_args()
-
-if args.log_level:
-    numeric_level = getattr(logging, args.log_level.upper(), None)
-    if not isinstance(numeric_level, int):
-        raise ValueError('Invalid log level: %s' % args.log_level)
-    logging.basicConfig(level=numeric_level)
-
-# open input file
-if args.input:
-    vcf_reader = vcf.Reader(filename=args.input)
-else:
-    vcf_reader = vcf.Reader(fsock=sys.stdin)
-logging.info('found INFO fields: ' + str([k for k in vcf_reader.infos.keys()]))
-logging.info('found FORMAT fields: ' + str([k for k in vcf_reader.formats.keys()]))
-logging.info('found SAMPLES: ' + str(vcf_reader.samples))
-assert args.child in vcf_reader.samples, 'child sample \'' + args.child + '\' not found: ' + str(vcf_reader.samples)
-assert args.parent[0] in vcf_reader.samples, 'parent sample \'' + args.parent[0] + '\' not found: ' + str(vcf_reader.samples)
-assert args.parent[1] in vcf_reader.samples, 'parent sample \'' + args.parent[1] + '\' not found: ' + str(vcf_reader.samples)
-# save index of child
-child_sample_idx = vcf_reader.samples.index(args.child)
-# add FORMAT/PS field if not existing already
-# if 'PS' not in vcf_reader.formats:
-#     logging.info('adding FORMAT/PS field')
-#     vcf_reader.formats['PS'] = vcf.parser._Format('PS', format_ps_num, format_ps_type, format_ps_desc)
-# else:
-#     if vcf_reader.formats['PS'].num != format_ps_num:
-#         logging.err('FORMAT/PS.num != "' + str(format_ps_num) + '": ' + str(vcf_reader.formats['PS']))
-#         sys.exit(1)
-# open output file
-if args.output:
-    vcf_writer = vcf.Writer(open(args.output, 'w'), vcf_reader)
-else:
-    vcf_writer = vcf.Writer(sys.stdout, vcf_reader)
-# iterate over records in input file
-for record in vcf_reader:
     # add FORMAT/PS field if not existing already
-    # format_l = record.FORMAT.split(':')
-    # if 'PS' not in format_l:
-    #     format_l.insert(1, 'PS')
-    #     record.FORMAT = ':'.join(format_l)
-    #     new_samples = list()
-    #     new_c_data_fact = get_call_data_fact(record.FORMAT, format_l, record.samples[0].data)
-    #     for c in record.samples:
-    #         l = list(c.data)
-    #         if c.data[0] != None:
-    #             l.insert(1, ','.join(['.'] * len(c.data[0].replace('/', ' ').replace('|', ' ').split())))
-    #         else:
-    #             l.insert(1, None)
-    #         new_samples.append(vcf.model._Call(record, c.sample, new_c_data_fact._make(l)))
-    #     record.samples = new_samples
-    # process current record
-    process_record()
-    vcf_writer.write_record(record)
-    cnt['total_records'] += 1
+    # if 'PS' not in vcf_reader.formats:
+    #     logging.info('adding FORMAT/PS field')
+    #     vcf_reader.formats['PS'] = vcf.parser._Format('PS', format_ps_num, format_ps_type, format_ps_desc)
+    # else:
+    #     if vcf_reader.formats['PS'].num != format_ps_num:
+    #         logging.err('FORMAT/PS.num != "' + str(format_ps_num) + '": ' + str(vcf_reader.formats['PS']))
+    #         sys.exit(1)
 
-print('total records: ' + str(cnt['total_records']), file=sys.stderr)
-print('  het: ' + str(cnt['het']), file=sys.stderr)
-print('    allele with zero parent support: ' + str(cnt['zero_parent_support']), file=sys.stderr)
-print('    both alleles supported by same parent: ' + str(cnt['double_parent_support']), file=sys.stderr)
-print('    ambiguous phasing: ' + str(cnt['ambiguous_phasing']), file=sys.stderr)
-print('    phased: ' + str(cnt['phased']), file=sys.stderr)
-print('      imputed phasing: ' + str(cnt['imputed_phasing']), file=sys.stderr)
-print('      complete phasing: ' + str(cnt['complete_phasing']), file=sys.stderr)
+    # open output file
+    if args.output:
+        vcf_writer = vcf.Writer(open(args.output, 'w'), vcf_reader)
+    else:
+        vcf_writer = vcf.Writer(sys.stdout, vcf_reader)
+
+    # iterate over records in input file
+    for record in vcf_reader:
+        # add FORMAT/PS field if not existing already
+        # format_l = record.FORMAT.split(':')
+        # if 'PS' not in format_l:
+        #     format_l.insert(1, 'PS')
+        #     record.FORMAT = ':'.join(format_l)
+        #     new_samples = list()
+        #     new_c_data_fact = get_call_data_fact(record.FORMAT, format_l, record.samples[0].data)
+        #     for c in record.samples:
+        #         l = list(c.data)
+        #         if c.data[0] != None:
+        #             l.insert(1, ','.join(['.'] * len(c.data[0].replace('/', ' ').replace('|', ' ').split())))
+        #         else:
+        #             l.insert(1, None)
+        #         new_samples.append(vcf.model._Call(record, c.sample, new_c_data_fact._make(l)))
+        #     record.samples = new_samples
+        # process current record
+        process_record(record, args)
+        vcf_writer.write_record(record)
+        args.cnt['total_records'] += 1
+
+    # print counters
+    print_counters(args.cnt)
+
+if __name__ == "__main__":
+    description = """
+    Given a VCF file containing polymorphism calls from a trio of samples, phase child calls using parent genotypes.
+    """
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('--log-level', dest='log_level', help='Logging level.')
+    parser.add_argument('-i', '--input', action='store', default=None, help='Input VCF file [stdin].')
+    parser.add_argument('-o', '--output', action='store', default=None, help='Output VCF file [stdout].')
+    parser.add_argument('--child', action='store', required=True, help='Child sample ID.')
+    parser.add_argument('--parent', action='store', required=True, nargs=2, help='Parent sample IDs.')
+    args = parser.parse_args()
+
+    if args.log_level:
+        numeric_level = getattr(logging, args.log_level.upper(), None)
+        if not isinstance(numeric_level, int):
+            raise ValueError('Invalid log level: %s' % args.log_level)
+        logging.basicConfig(level=numeric_level)
+
+    real_main(args)
