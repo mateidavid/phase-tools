@@ -66,7 +66,8 @@ namespace global
     // phased chromosomes
     set< string > skip_chr_s;
     // variations
-    map< string, set< Het_Variation > > var_m;
+    map< string, deque< Het_Variation > > var_m;
+    map< string, set< const Het_Variation *, Het_Variation_Ptr_Comp > > het_m;
     // list of chromosomes in order of input file
     list< string > chrom_l;
     // list of genotypes observed by a fragment
@@ -163,13 +164,14 @@ void load_variations()
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
         Het_Variation v(hdr_p, rec_p, dat, dat_size, false);
-        if (global::skip_chr_s.count(v.chr_name()) > 0)
+        string chrom = v.chr_name();
+        if (global::skip_chr_s.count(chrom) > 0)
         {
             continue;
         }
-        if (global::chrom_l.empty() or v.chr_name() != global::chrom_l.back())
+        if (global::chrom_l.empty() or chrom != global::chrom_l.back())
         {
-            global::chrom_l.push_back(v.chr_name());
+            global::chrom_l.push_back(chrom);
         }
         if (v.is_het())
         {
@@ -177,11 +179,16 @@ void load_variations()
             v.load_flanks(global::faidx_p, global::flank_len);
         }
         LOG("variations", debug) << v << endl;
-        auto res = global::var_m[v.chr_name()].insert(move(v));
-        if (not res.second)
+        global::var_m[chrom].push_back(move(v));
+        const Het_Variation & v_ref = global::var_m[chrom].back();
+        if (v_ref.is_het())
         {
-            cerr << "duplicate variation:\n" << v << endl;
-            exit(EXIT_FAILURE);
+            auto res = global::het_m[chrom].insert(&v_ref);
+            if (not res.second)
+            {
+                cerr << "duplicate variation:\n" << v_ref << endl;
+                exit(EXIT_FAILURE);
+            }
         }
     }
     // destroy structures and close file
@@ -421,7 +428,7 @@ void process_mapping(const Mapping & m)
         ++global::num_out_map_skip_chr;
         return;
     }
-    if (not global::var_m.count(m.chr_name()))
+    if (not global::het_m.count(m.chr_name()))
     {
         // no hets on this chr
         return;
@@ -431,13 +438,15 @@ void process_mapping(const Mapping & m)
         return;
     }
     // compute range of variations spanned by this mapping
-    auto it_start = global::var_m.at(m.chr_name()).lower_bound(Het_Variation(m.rf_start()));
-    while (it_start != global::var_m.at(m.chr_name()).begin()
-           and prev(it_start)->rf_end() > m.rf_start())
+    Het_Variation het_start(m.rf_start());
+    Het_Variation het_end(m.rf_end());
+    auto it_start = global::het_m.at(m.chr_name()).lower_bound(&het_start);
+    while (it_start != global::het_m.at(m.chr_name()).begin()
+           and (*prev(it_start))->rf_end() > m.rf_start())
     {
         --it_start;
     }
-    auto it_end = global::var_m.at(m.chr_name()).lower_bound(Het_Variation(m.rf_end()));
+    auto it_end = global::het_m.at(m.chr_name()).lower_bound(&het_end);
     if (it_start == it_end)
     {
         // not spanning any hets
@@ -447,7 +456,7 @@ void process_mapping(const Mapping & m)
     auto & fm = global::frag_store_m[m.query_name()];
     for (auto it = it_start; it != it_end; ++it)
     {
-        const Het_Variation & v = *it;
+        const Het_Variation & v = **it;
         int phase = get_phase(m, v);
         if (phase >= 0)
         {
@@ -521,12 +530,12 @@ void process_chromosome(const string & chr)
     }
 
     // create initial phased sets as single hets
-    vector< Phased_Set > phased_set_v(global::var_m.at(chr).size());
+    vector< Phased_Set > phased_set_v(global::het_m.at(chr).size());
     size_t i = 0;
-    for (const auto & v : global::var_m.at(chr))
+    for (const auto & v_p : global::het_m.at(chr))
     {
-        phased_set_v[i].het_set().insert(make_pair(&v, false));
-        v.phased_set_ptr = &phased_set_v[i];
+        phased_set_v[i].het_set().insert(make_pair(v_p, false));
+        v_p->phased_set_ptr = &phased_set_v[i];
         ++i;
     }
     // initialize collection of phased set connections
@@ -645,11 +654,11 @@ void process_chromosome(const string & chr)
     }
 
     // output
-    for (const auto & v : global::var_m[chr])
+    for (const auto & v_p : global::het_m[chr])
     {
-        Phased_Set & ps = *v.phased_set_ptr;
-        v.ps_phase = ps.het_set().find(make_pair(&v, false)) == ps.het_set().end();
-        v.ps_start_1 = ps.het_set().begin()->first->rf_start() + 1;
+        Phased_Set & ps = *v_p->phased_set_ptr;
+        v_p->ps_phase = ps.het_set().find(make_pair(v_p, false)) == ps.het_set().end();
+        v_p->ps_start_1 = ps.het_set().begin()->first->rf_start() + 1;
     }
 
     // clear intrusive structure (the rest are cleared automatically)
@@ -696,21 +705,21 @@ void print_var_stats(ostream & os)
 {
     if (global::chr.get().empty())
     {
-        for (const auto & s : global::var_m)
+        for (const auto & s : global::het_m)
         {
-            for(const auto & v : s.second)
+            for(const auto & v_p : s.second)
             {
-                os << v << endl;
+                os << *v_p << endl;
             }
         }
     }
     else
     {
-        if (global::var_m.count(global::chr))
+        if (global::het_m.count(global::chr))
         {
-            for (const auto & v : global::var_m.at(global::chr))
+            for (const auto & v_p : global::het_m.at(global::chr))
             {
-                os << v << endl;
+                os << *v_p << endl;
             }
         }
     }
@@ -722,16 +731,16 @@ void real_main()
     load_reference_index();
     load_variations();
     //print_variations(clog);
-    if (not global::chr.get().empty())
+    if (global::chr.get().empty())
     {
-        process_chromosome(global::chr);
+        for (const auto & chrom : global::chrom_l)
+        {
+            process_chromosome(chrom);
+        }
     }
     else
     {
-        for (const auto & p : global::var_m)
-        {
-            process_chromosome(p.first);
-        }
+        process_chromosome(global::chr);
     }
     output_variations();
     // cleanup
