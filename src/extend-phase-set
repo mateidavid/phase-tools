@@ -28,21 +28,29 @@ class Genotype_Pair(object):
         for i in range(2):
             c = record.genotype(s_l[i])
             gt = c['GT']
-            if gt != None:
-                self.gt[i] = [int(a) for a in gt.replace('|', '/').split('/')]
-                if len(self.gt[i]) == 2 and self.gt[i][0] != self.gt[i][1]:
-                    if '|' in gt:
-                        if 'PS' in c.data._fields and c['PS'] != None:
-                            self.ps[i] = c['PS']
-                        else:
-                            self.ps[i] = 0
+            if gt == None:
+                gt = '0|0'
+            self.gt[i] = [int(a) for a in gt.replace('|', '/').split('/')]
+            if len(self.gt[i]) != 2:
+                continue
+            if self.gt[i][0] != self.gt[i][1]:
+                if '|' in gt:
+                    if 'PS' in c.data._fields and c['PS'] != None:
+                        self.ps[i] = c['PS']
                     else:
-                        assert 'PS' not in c.data._fields or c['PS'] == None
-                        self.ps[i] = record.POS
+                        self.ps[i] = 0
+                else:
+                    assert 'PS' not in c.data._fields or c['PS'] == None
+                    self.ps[i] = record.POS
+            elif args.extra_is_parent != None and i == 0:
+                # keep homs in child, they can be used to infer parent-of-origin
+                self.ps[0] = args.parental_base_phase_set
+        if not self.is_valid():
+            return
         if args.extra_is_parent == None:
             # genotypes must be the same, else ignore site
             if sorted(self.gt[0]) != sorted(self.gt[1]):
-                logging.debug('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: differring genotypes: ' + str(self.__dict__))
+                logging.warning('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: differring genotypes: ' + str(self.__dict__))
                 self.ps = [None, None]
         else:
             # if the site is part of the parental base phase set,
@@ -50,7 +58,7 @@ class Genotype_Pair(object):
             if self.ps[0] == args.parental_base_phase_set:
                 a = self.gt[0][args.extra_is_parent]
                 if a not in self.gt[1]:
-                    logging.debug('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: parental allele not in parent: ' + str(self.__dict__))
+                    logging.warning('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: parental allele not in parent: ' + str(self.__dict__))
                     self.ps = [None, None]
     def is_valid(self):
         return None not in self.ps
