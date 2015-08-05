@@ -183,3 +183,4 @@ add_dependencies(ngs-phase
     )
 
 file(COPY add-parent-phasing DESTINATION .)
+file(COPY extend-phase-set DESTINATION .)
