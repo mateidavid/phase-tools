@@ -67,8 +67,13 @@ namespace global
     set< string > skip_chr_s;
     // variations
     map< string, set< Het_Variation > > var_m;
+    // list of chromosomes in order of input file
+    list< string > chrom_l;
     // list of genotypes observed by a fragment
     map< string, map< const Het_Variation *, bool > > frag_store_m;
+    // output structures
+    vcfFile * of_p;
+    bcf_hdr_t * ohdr_p;
 
     // counts
 
@@ -127,6 +132,7 @@ void load_variations()
     // open vcf file, initialize structs
     auto f_p = bcf_open(global::var_fn.get().c_str(), "r");
     auto hdr_p = bcf_hdr_read(f_p);
+    global::ohdr_p = bcf_hdr_init("w");
     auto rec_p = bcf_init1();
     int * dat = nullptr;
     int dat_size = 0;
@@ -137,17 +143,39 @@ void load_variations()
         cerr << "bcf_hdr_set_samples() error: status=" << ret << endl;
         exit(1);
     }
+
+    // set up output header (copy contigs)
+    bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
+    bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
+    int n_seqs;
+    auto seq_names = bcf_hdr_seqnames(hdr_p, &n_seqs);
+    for (int i = 0; i < n_seqs; ++i)
+    {
+        auto hrec_p = bcf_hdr_get_hrec(hdr_p, BCF_HL_CTG, "ID", seq_names[i], nullptr);
+        bcf_hdr_add_hrec(global::ohdr_p, bcf_hrec_dup(hrec_p));
+    }
+    free(seq_names);
+    bcf_hdr_add_sample(global::ohdr_p, global::sample_id.get().c_str());
+    bcf_hdr_add_sample(global::ohdr_p, nullptr); //?!?!
+
     // main loop
     while (bcf_read1(f_p, hdr_p, rec_p) >= 0)
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
         Het_Variation v(hdr_p, rec_p, dat, dat_size, false);
-        if (not v.is_valid() or global::skip_chr_s.count(v.chr_name()) > 0)
+        if (global::skip_chr_s.count(v.chr_name()) > 0)
         {
             continue;
         }
-        v.reset_phase();
-        v.load_flanks(global::faidx_p, global::flank_len);
+        if (global::chrom_l.empty() or v.chr_name() != global::chrom_l.back())
+        {
+            global::chrom_l.push_back(v.chr_name());
+        }
+        if (v.is_het())
+        {
+            v.reset_phase();
+            v.load_flanks(global::faidx_p, global::flank_len);
+        }
         LOG("variations", debug) << v << endl;
         auto res = global::var_m[v.chr_name()].insert(move(v));
         if (not res.second)
@@ -170,48 +198,42 @@ void load_variations()
     LOG("main", info) << "load_variations(): end" << endl;
 }
 
-void output_variations()
+void output_variations_chromosome(const string & chrom)
 {
-    int ret;
-    auto if_p = bcf_open(global::var_fn.get().c_str(), "r");
-    auto of_p = bcf_open(global::out_var_fn.get().c_str(), "wb");
-    auto ihdr_p = bcf_hdr_read(if_p);
-    auto ohdr_p = bcf_hdr_init("w");
-    auto irec_p = bcf_init1();
-    int * dat = nullptr;
-    int dat_size = 0;
     int odat[2];
-    // restrict processing to given sample_id
-    ret = bcf_hdr_set_samples(ihdr_p, global::sample_id.get().c_str(), 0);
-    if (ret != 0)
+    for (const auto & v : global::var_m[chrom])
     {
-        cerr << "bcf_hdr_set_samples() error: status=" << ret << endl;
-        exit(1);
+        assert(v.chr_name() == chrom);
+        auto orec_p = bcf_init1();
+        // set chr and pos
+        orec_p->rid = bcf_hdr_name2id(global::ohdr_p, chrom.c_str());
+        orec_p->pos = v.rf_start();
+        // set alleles
+        ostringstream oss;
+        for (size_t i = 0; i < v.n_alleles(); ++i)
+        {
+            oss << (i > 0? "," : "") << v.allele_seq(i);
+        }
+        bcf_update_alleles_str(global::ohdr_p, orec_p, oss.str().c_str());
+        if (v.is_het())
+        {
+            // set GT
+            odat[0] = bcf_gt_phased(v.gt(v.ps_phase));
+            odat[1] = bcf_gt_phased(v.gt(1 - v.ps_phase));
+            bcf_update_genotypes(global::ohdr_p, orec_p, odat, 2);
+            // set PS
+            bcf_update_format_int32(global::ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
+        }
+        else
+        {
+            // set GT
+            bcf_update_genotypes(global::ohdr_p, orec_p, v.raw_gt().data(), v.raw_gt().size());
+        }
+        bcf_write1(global::of_p, global::ohdr_p, orec_p);
+        bcf_destroy1(orec_p);
     }
 
-    // write out new header
-    bcf_hdr_append(ohdr_p, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
-    bcf_hdr_append(ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
-    int n_seqs;
-    auto seq_names = bcf_hdr_seqnames(ihdr_p, &n_seqs);
-    for (int i = 0; i < n_seqs; ++i)
-    {
-        auto hrec_p = bcf_hdr_get_hrec(ihdr_p, BCF_HL_CTG, "ID", seq_names[i], nullptr);
-        bcf_hdr_add_hrec(ohdr_p, bcf_hrec_dup(hrec_p));
-    }
-    free(seq_names);
-    bcf_hdr_add_sample(ohdr_p, global::sample_id.get().c_str());
-    bcf_hdr_add_sample(ohdr_p, nullptr); //???
-    bcf_hdr_write(of_p, ohdr_p);
-
-    // set orec defaults
     /*
-    bcf_unpack(orec_p, BCF_UN_ALL);
-    orec_p->qual = 0;
-    bcf_update_id(ohdr_p, orec_p, nullptr);
-    bcf_update_filter(ohdr_p, orec_p, nullptr, 0);
-    */
-
     // transform output file
     while (bcf_read1(if_p, ihdr_p, irec_p) >= 0)
     {
@@ -249,14 +271,29 @@ void output_variations()
         bcf_write1(of_p, ohdr_p, orec_p);
         bcf_destroy1(orec_p);
     }
+    */
+}
 
+void output_variations()
+{
+    global::of_p = bcf_open(global::out_var_fn.get().c_str(), "wb");
+    // write out header
+    bcf_hdr_write(global::of_p, global::ohdr_p);
+    // process chromosomes
+    if (global::chr.get().empty())
+    {
+        for (const auto & chrom : global::chrom_l)
+        {
+            output_variations_chromosome(chrom);
+        }
+    }
+    else
+    {
+        output_variations_chromosome(global::chr);
+    }
     // destroy structures and close file
-    if (dat) free(dat);
-    bcf_destroy1(irec_p);
-    bcf_hdr_destroy(ohdr_p);
-    bcf_hdr_destroy(ihdr_p);
-    bcf_close(of_p);
-    bcf_close(if_p);
+    bcf_hdr_destroy(global::ohdr_p);
+    bcf_close(global::of_p);
 }
 
 void print_variations(ostream& os)

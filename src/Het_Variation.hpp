@@ -19,29 +19,25 @@ public:
     Het_Variation(int rf_start) : _rf_start(rf_start) {}
     Het_Variation(const bcf_hdr_t * hdr_p, bcf1_t * rec_p, int *& dat, int & dat_size, bool assign_random_phase)
     {
-        const int n_samples = 1;
-        const int sample_idx = 0;
         _chr_name = bcf_hdr_id2name(hdr_p, rec_p->rid);
-        int total_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
-        _n_gt = total_gt / n_samples;
-        _is_valid = (_n_gt >= 2
-                     and not bcf_gt_is_missing(dat[sample_idx * _n_gt + 0])
-                     and not bcf_gt_is_missing(dat[sample_idx * _n_gt + 1])
-                     and bcf_gt_allele(dat[sample_idx * _n_gt + 0]) != bcf_gt_allele(dat[sample_idx * _n_gt + 1])
-                     and (_n_gt == 2 or dat[sample_idx * _n_gt + 2] == bcf_int32_vector_end));
-        if (_is_valid)
+        _rf_start = rec_p->pos;
+        _rf_len = rec_p->rlen;
+        for (int i = 0; i < rec_p->n_allele; ++i)
         {
-            _rf_start = rec_p->pos;
-            _rf_len = rec_p->rlen;
-            for (int i = 0; i < rec_p->n_allele; ++i)
-            {
-                _allele_seq_v.emplace_back(rec_p->d.allele[i]);
-            }
+            _allele_seq_v.emplace_back(rec_p->d.allele[i]);
+        }
+        _n_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
+        _is_het = (_n_gt == 2
+                   and not bcf_gt_is_missing(dat[0])
+                   and not bcf_gt_is_missing(dat[1])
+                   and bcf_gt_allele(dat[0]) != bcf_gt_allele(dat[1]));
+        if (_is_het)
+        {
             for (int i = 0; i < 2; ++i)
             {
-                _gt[i] = bcf_gt_allele(dat[sample_idx * _n_gt + i]);
+                _gt[i] = bcf_gt_allele(dat[i]);
             }
-            _is_phased = bcf_gt_is_phased(dat[sample_idx * _n_gt + 1]);
+            _is_phased = bcf_gt_is_phased(dat[1]);
             _is_snp = (_allele_seq_v[0].size() == 1
                        and _allele_seq_v[_gt[0]].size() == 1
                        and _allele_seq_v[_gt[1]].size() == 1);
@@ -51,13 +47,18 @@ public:
                 int flip_phase = lrand48() % 2;
                 if (flip_phase) std::swap(_gt[0], _gt[1]);
             }
-            frag_total = 0;
-            frag_supp_allele[0] = 0;
-            frag_supp_allele[1] = 0;
-            frag_conflicting = 0;
-            ps_phase = 0;
-            ps_start_1 = rf_start() + 1;
         }
+        else
+        {
+            // keep raw genotypes to be able to output them
+            _raw_gt.assign(dat, dat + dat_size);
+        }
+        frag_total = 0;
+        frag_supp_allele[0] = 0;
+        frag_supp_allele[1] = 0;
+        frag_conflicting = 0;
+        ps_phase = 0;
+        ps_start_1 = rf_start() + 1;
     }
 
     const std::string & chr_name() const { return _chr_name; }
@@ -69,8 +70,9 @@ public:
     int rf_len() const { return _rf_len; }
     int rf_end() const { return rf_start() + rf_len(); }
     int gt(int i) const { return _gt[i]; }
+    const std::vector< int > & raw_gt() const { return _raw_gt; }
     size_t n_alleles() const { return _allele_seq_v.size(); }
-    bool is_valid() const { return _is_valid; }
+    bool is_het() const { return _is_het; }
     bool is_phased() const { return _is_phased; }
     bool is_snp() const { return _is_snp; }
     void reset_phase() { _is_phased = false; if (_gt[0] > _gt[1]) std::swap(_gt[0], _gt[1]); }
@@ -124,11 +126,12 @@ private:
     std::string _chr_name;
     DNA_Sequence _flank_seq[2];
     std::vector< DNA_Sequence > _allele_seq_v;
+    std::vector< int > _raw_gt;
     int _n_gt;
     int _rf_start;
     int _rf_len;
     int _gt[2];
-    bool _is_valid;
+    bool _is_het;
     bool _is_phased;
     bool _is_snp; // true iff all of (potentially 3) alleles: ref, gt[0], gt[1] are length 1
 

@@ -154,7 +154,7 @@ void load_variations()
     {
         bcf_unpack(rec_p, BCF_UN_ALL);
         Het_Variation v(hdr_p, rec_p, dat, dat_size, true);
-        if (not v.is_valid() or global::chr_phase_m.count(v.chr_name()) > 0)
+        if (global::chr_phase_m.count(v.chr_name()) > 0 or not v.is_het())
         {
             continue;
         }
