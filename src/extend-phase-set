@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+
+import argparse
+import collections
+import copy
+import logging
+import operator
+import sys
+import vcf
+
+call_data_fact_dict = dict()
+def get_call_data_fact(fmt, fmt_l, orig_call_data):
+    if fmt not in call_data_fact_dict:
+        new_fact = vcf.model.make_calldata_tuple(fmt_l)
+        new_fact._types = copy.deepcopy(orig_call_data._types)
+        new_fact._nums = copy.deepcopy(orig_call_data._nums)
+        new_fact._types.append('Integer')
+        new_fact._nums.append(1)
+        call_data_fact_dict[fmt] = new_fact
+    return call_data_fact_dict[fmt]
+
+class Genotype_Pair(object):
+    def __init__(self, record, args):
+        self.record = record
+        s_l = [args.base_id, args.extra_id]
+        self.gt = [None, None]
+        self.ps = [None, None]
+        for i in range(2):
+            c = record.genotype(s_l[i])
+            gt = c['GT']
+            if gt != None:
+                self.gt[i] = [int(a) for a in gt.replace('|', '/').split('/')]
+                if len(self.gt[i]) == 2 and self.gt[i][0] != self.gt[i][1]:
+                    if '|' in gt:
+                        if 'PS' in c.data._fields and c['PS'] != None:
+                            self.ps[i] = c['PS']
+                        else:
+                            self.ps[i] = 0
+                    else:
+                        assert 'PS' not in c.data._fields or c['PS'] == None
+                        self.ps[i] = record.POS
+        if args.extra_is_parent == None:
+            # genotypes must be the same, else ignore site
+            if sorted(self.gt[0]) != sorted(self.gt[1]):
+                logging.debug('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: differring genotypes: ' + str(self.__dict__))
+                self.ps = [None, None]
+        else:
+            # if the site is part of the parent phase set, the corresponding allele must be present in the parent
+            if self.ps[0] == args.parent_base_phase_set:
+                a = self.gt[0][args.extra_is_parent]
+                if a not in self.gt[1]:
+                    logging.debug('ignoring site [' + record.CHROM + ':' + str(record.POS) + ']: parent allele not in parent: ' + str(self.__dict__))
+                    self.ps = [None, None]
+    def is_valid(self):
+        return None not in self.ps
+
+def init_chromosome(chrom, args):
+    args.crt_chr = chrom
+    args.gp_l = list()
+    args.phase_collection_ld = [collections.defaultdict(list), collections.defaultdict(list)]
+
+def get_base_phase_diff(gp0, gp1, args):
+    bps0 = gp0.ps[0]
+    bps1 = gp1.ps[0]
+    assert bps0 != None
+    assert bps1 != None
+    if args.extra_is_parent == None:
+        assert sorted(gp0.gt[0]) == sorted(gp0.gt[1])
+        assert sorted(gp1.gt[0]) == sorted(gp1.gt[1])
+        return int((gp0.gt[0] != gp0.gt[1]) != (gp1.gt[0] != gp1.gt[1]))
+    else:
+        assert bps0 == args.parent_base_phase_set
+        # a0 is the allele that comes from this parent at gp0
+        a0 = gp0.gt[0][args.extra_is_parent]
+        if a0 not in gp0.gt[1]:
+            return -1
+        parent_phase = gp0.gt[1].index(a0)
+        # a1 is the allele at gp1 phased with a0 in the parent
+        a1 = gp1.gt[1][parent_phase]
+        if a1 not in gp1.gt[0]:
+            return -2
+        return int(gp1.gt[0].index(a1) != args.extra_is_parent)
+
+
+def flip_base_phase_set(bps, args):
+    for gp in args.phase_collection_ld[0][bps]:
+        gp.gt[0] = gp.gt[0][::-1]
+
+def connect_base_phase_sets(gp0, gp1, args):
+    bps0 = gp0.ps[0]
+    bps1 = gp1.ps[0]
+    assert bps0 != bps1
+    assert gp0.ps[1] == gp1.ps[1]
+    if args.parent_base_phase_set != None:
+        assert bps0 == args.parent_base_phase_set
+    phase_diff = get_base_phase_diff(gp0, gp1, args)
+    logging.debug('connecting base phase sets [' + str(bps0) + '] and [' + str(bps1) + '] using gp0=[' + str(gp0.__dict__) + '], gp1=[' + str(gp1.__dict__) + '], phase_diff=[' + str(phase_diff) + ']')
+    if phase_diff < 0:
+        # there was an error in identifying parental alleles
+        assert args.parent_base_phase_set != None
+        logging.debug('error in parental allele calculation when connecting: ' + str(gp0.__dict__) + ' and ' + str(gp1.__dict__))
+        eps = gp1.ps[1]
+        gp1.ps = [None, None]
+        args.phase_collection_ld[0][bps1].remove(gp1)
+        args.phase_collection_ld[1][eps].remove(gp1)
+        return
+    elif phase_diff > 0:
+        if args.parent_base_phase_set == None:
+            # flip the smaller phase set
+            if len(args.phase_collection_ld[0][bps0]) < len(args.phase_collection_ld[0][bps1]):
+                flip_base_phase_set(bps0, args)
+            else:
+                flip_base_phase_set(bps1, args)
+        else:
+            # flip the non-parent base phase set
+            assert bps0 == args.parent_base_phase_set
+            flip_base_phase_set(bps1, args)
+        phase_diff = False
+    if args.parent_base_phase_set == None:
+        # merge under the phase set with smaller index
+        bps_min = min(bps0, bps1)
+        bps_max = max(bps0, bps1)
+    else:
+        # merge under the parent base phase set
+        assert bps0 == args.parent_base_phase_set
+        bps_min = bps0
+        bps_max = bps1
+    for gp in args.phase_collection_ld[0][bps_max]:
+        assert gp.ps[0] == bps_max
+        gp.ps[0] = bps_min
+    args.phase_collection_ld[0][bps_min] += args.phase_collection_ld[0][bps_max]
+    del args.phase_collection_ld[0][bps_max]
+
+def process_chromosome(args):
+    if args.crt_chr == None:
+        return
+    logging.debug('processing chromosome [' + args.crt_chr + ']')
+    # iterate through phase sets in the extra collection
+    for extra_ps in args.phase_collection_ld[1].keys():
+        logging.debug('processing extra phase set [' + str(extra_ps) + ']')
+        extra_ps_l = args.phase_collection_ld[1][extra_ps]
+        assert len(extra_ps_l) > 0
+        while True:
+            if len(extra_ps_l) < 2:
+                break
+            # find consecutive pairs of sites from extra_ps_l
+            # that connect different base phase sets
+            idx_l = list()
+            for i in range(len(extra_ps_l) - 1):
+                gp0 = extra_ps_l[i]
+                gp1 = extra_ps_l[i + 1]
+                if gp0.ps[0] == None or gp1.ps[0] == None or gp0.ps[0] == gp1.ps[0]:
+                    continue
+                # if extra_is_parent is given, only look for connections involving the parent base phase set
+                if (args.extra_is_parent != None and
+                    gp0.ps[0] != args.parent_base_phase_set and
+                    gp1.ps[0] != args.parent_base_phase_set):
+                    continue
+                idx_l.append([i, gp1.record.POS - gp0.record.POS])
+            # done with this extra phase set when list is empty
+            if len(idx_l) == 0:
+                break
+            # pick the connection with the smallest distance
+            idx_l.sort(key=operator.itemgetter(1))
+            i = idx_l[0][0]
+            gp0 = extra_ps_l[i]
+            gp1 = extra_ps_l[i + 1]
+            if args.extra_is_parent != None and gp0.ps[0] != args.parent_base_phase_set:
+                gp0, gp1 = gp1, gp0
+            connect_base_phase_sets(gp0, gp1, args)
+    # output records
+    for gp in args.gp_l:
+        r = gp.record
+        if gp.ps[0] != None:
+            new_gt = '|'.join((str(a) for a in gp.gt[0]))
+            c = r.samples[args.base_set_idx]
+            new_c_data = c.data._replace(GT=new_gt, PS=[None, gp.ps[0]][gp.ps[0] > 0])
+            r.samples[args.base_set_idx] = vcf.model._Call(r, c.sample, new_c_data)
+        args.vcf_writer.write_record(r)
+
+def add_record(record, args):
+    gp = Genotype_Pair(record, args)
+    logging.debug('gp: ' + str(gp.__dict__))
+    chrom = gp.record.CHROM
+    #
+    # if starting a new chromosome, process existing data first
+    #
+    if chrom != args.crt_chr:
+        process_chromosome(args)
+        init_chromosome(chrom, args)
+    #
+    # add gp to gp list and to corresponding phase collections
+    #
+    args.gp_l.append(gp)
+    if gp.is_valid():
+        for i in range(2):
+            args.phase_collection_ld[i][gp.ps[i]].append(gp)
+
+def print_counters(cnt):
+    print('total records: ' + str(cnt['total_records']), file=sys.stderr)
+    print('  het: ' + str(cnt['het']), file=sys.stderr)
+    print('    allele with zero parent support: ' + str(cnt['zero_parent_support']), file=sys.stderr)
+    print('    both alleles supported by same parent: ' + str(cnt['double_parent_support']), file=sys.stderr)
+    print('    ambiguous phasing: ' + str(cnt['ambiguous_phasing']), file=sys.stderr)
+    print('    phased: ' + str(cnt['phased']), file=sys.stderr)
+    print('      deduced phasing: ' + str(cnt['deduced_phasing']), file=sys.stderr)
+    print('      complete phasing: ' + str(cnt['complete_phasing']), file=sys.stderr)
+
+def real_main(args):
+    # open input file
+    if args.input:
+        vcf_reader = vcf.Reader(filename=args.input)
+    else:
+        vcf_reader = vcf.Reader(fsock=sys.stdin)
+    logging.info('found INFO fields: ' + str([k for k in vcf_reader.infos.keys()]))
+    logging.info('found FORMAT fields: ' + str([k for k in vcf_reader.formats.keys()]))
+    logging.info('found SAMPLES: ' + str(vcf_reader.samples))
+    assert args.base_id in vcf_reader.samples
+    assert args.extra_id in vcf_reader.samples
+    args.base_set_idx = vcf_reader.samples.index(args.base_id)
+    args.cnt = collections.defaultdict(int)
+
+    # add FORMAT/PS field if not existing already
+    if 'PS' not in vcf_reader.formats:
+        logging.info('adding FORMAT/PS field')
+        vcf_reader.formats['PS'] = vcf.parser._Format('PS', 1, 'Integer', 'Phase Set')
+
+    # open output file
+    if args.output:
+        args.vcf_writer = vcf.Writer(open(args.output, 'w'), vcf_reader)
+    else:
+        args.vcf_writer = vcf.Writer(sys.stdout, vcf_reader)
+
+    # iterate over records in input file
+    init_chromosome(None, args)
+    for record in vcf_reader:
+        # add FORMAT/PS field if not existing already
+        format_l = record.FORMAT.split(':')
+        if 'PS' not in format_l:
+            format_l.append('PS')
+            record.FORMAT = ':'.join(format_l)
+            new_samples = list()
+            new_c_data_fact = get_call_data_fact(record.FORMAT, format_l, record.samples[0].data)
+            for c in record.samples:
+                l = list(c.data) + [None]
+                new_samples.append(vcf.model._Call(record, c.sample, new_c_data_fact._make(l)))
+            record.samples = new_samples
+        # process current record
+        add_record(record, args)
+        args.cnt['total_records'] += 1
+    process_chromosome(args)
+
+    # print counters
+    #print_counters(args.cnt)
+
+if __name__ == "__main__":
+    description = """
+    Given a VCF file containing 2 phased set collections (stored as different sample columns),
+    extend sets from one collection using sets from the other collection.
+    """
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('--log-level', dest='log_level', help='Logging level.')
+    parser.add_argument('-i', '--input', action='store', default=None, help='Input VCF file [stdin].')
+    parser.add_argument('-o', '--output', action='store', default=None, help='Output VCF file [stdout].')
+    parser.add_argument('--base-id', action='store', required=True, help='Sample ID containing base phase set collection.')
+    parser.add_argument('--extra-id', action='store', required=True, help='Sample ID containing extra phase set collection.')
+    parser.add_argument('--parent-base-phase-set', action='store', type=int, default=None, help='Base phase set that is never flipped (only allowed when --extra-is-parent is also given).')
+    parser.add_argument('--extra-is-parent', action='store', type=int, default=None, help='Extra phase set collection comes from parent of sample with the base phase set collection. The 0/1 argument is the phase corresponding to this parent in the parent base phase set.')
+    args = parser.parse_args()
+
+    if args.log_level:
+        numeric_level = getattr(logging, args.log_level.upper(), None)
+        if not isinstance(numeric_level, int):
+            raise ValueError('Invalid log level: %s' % args.log_level)
+        logging.basicConfig(level=numeric_level)
+
+    assert args.extra_is_parent == None or args.extra_is_parent in [0, 1]
+    if args.extra_is_parent != None:
+        if args.parent_base_phase_set == None:
+            args.parent_base_phase_set = 0
+    else:
+        assert args.parent_base_phase_set == None
+
+    real_main(args)

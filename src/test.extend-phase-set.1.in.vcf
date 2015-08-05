@@ -1,0 +1,16 @@
+##fileformat=VCFv4.1
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##contig=<ID=1,length=100000>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HG002	HG003
+1	1001	.	A	C	0	.	.	GT	0/1	0/0
+1	1101	.	A	C,G	0	.	.	GT	0/1	1/2
+1	1201	.	A	C,G	0	.	.	GT	0|1	1/2
+1	1301	.	A	C,G	0	.	.	GT	1|0	1/2
+1	2001	.	A	C	0	.	.	GT	0/1	0/1
+1	2101	.	A	C	0	.	.	GT	0|1	0/1
+1	3001	.	A	C	0	.	.	GT	0|1	0|1
+1	3101	.	A	C	0	.	.	GT	0|1	1|0
+1	4001	.	A	C	0	.	.	GT	0|1	0|1
+1	4101	.	A	C	0	.	.	GT	0/1	1|0
+1	4301	.	A	C	0	.	.	GT	0/1	1|0
+1	4351	.	A	C	0	.	.	GT	0|1	1|0
