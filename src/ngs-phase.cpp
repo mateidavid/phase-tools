@@ -283,7 +283,18 @@ void output_variations_chromosome(const string & chrom)
 
 void output_variations()
 {
-    global::of_p = bcf_open(global::out_var_fn.get().c_str(), "wb");
+    static const vector< pair< string, string > > extensions{ {".vcf.gz", "wz"}, {".bcf", "wb"}, {".vcf", "w"} };
+    string output_mode = "w";
+    for (const auto & p : extensions)
+    {
+        if (global::out_var_fn.get().size() >= p.first.size() + 1
+            and global::out_var_fn.get().substr(global::out_var_fn.get().size() - p.first.size()) == p.first)
+        {
+            output_mode = p.second;
+            break;
+        }
+    }
+    global::of_p = bcf_open(global::out_var_fn.get().c_str(), output_mode.c_str());
     // write out header
     bcf_hdr_write(global::of_p, global::ohdr_p);
     // process chromosomes
