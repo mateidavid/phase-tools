@@ -96,13 +96,14 @@ namespace global
     size_t num_out_map_unpaired_phased;
 
     size_t num_out_frag_total;
-    size_t num_out_frag_conflicting;
-    size_t num_out_frag_inconclusive;
+    size_t num_out_frag_hets_neither_side;
+    size_t num_out_frag_hets_single_side;
+    size_t num_out_frag_hets_single_side_inconclusive;
+    size_t num_out_frag_hets_both_sides;
+    size_t num_out_frag_hets_both_sides_inconclusive;
     size_t num_out_frag_random;
-    size_t num_out_frag_single_sided;
-    size_t num_out_frag_concordant;
-    size_t num_out_frag_missing_unmapped;
     size_t num_out_frag_missing_mapped;
+    size_t num_out_frag_missing_unmapped;
 
     size_t num_out_map_total;
     size_t num_out_map_preset;
@@ -358,41 +359,34 @@ int get_unpaired_decision(int decision)
 int get_paired_decision(int decision, int mp_decision, int frag_decision)
 {
     ++global::num_out_frag_total;
-    if (decision >= 0 and mp_decision >= 0 and decision != mp_decision)
+    if ((decision < -1) and (mp_decision < -1))
     {
-        // conflicting decisions
-        ++global::num_out_frag_conflicting;
-        if (frag_decision < 0)
-        {
-            frag_decision = lrand48() % 2;
-        }
+        assert(frag_decision < -1);
+        ++global::num_out_frag_hets_neither_side;
     }
-    else if (decision < 0 or mp_decision < 0)
+    if ((decision < -1) or (mp_decision < -1))
     {
-        if (decision < 0 and mp_decision < 0)
+        // one side has no hets
+        assert(frag_decision == (decision >= -1? decision : mp_decision));
+        ++global::num_out_frag_hets_single_side;
+        if (frag_decision == -1)
         {
-            if (decision == -1 or mp_decision == -1)
-            {
-                ++global::num_out_frag_inconclusive;
-            }
-            else
-            {
-                ++global::num_out_frag_random;
-            }
-            assert(frag_decision < 0);
-            frag_decision = lrand48() % 2;
-        }
-        else
-        {
-            ++global::num_out_frag_single_sided;
-            assert(frag_decision == (decision >= 0? decision : mp_decision));
+            ++global::num_out_frag_hets_single_side_inconclusive;
         }
     }
     else
     {
-        assert(decision >= 0 and mp_decision >= 0 and decision == mp_decision);
-        ++global::num_out_frag_concordant;
-        assert(frag_decision == decision);
+        // both sides have hets
+        ++global::num_out_frag_hets_both_sides;
+        if (frag_decision == -1)
+        {
+            ++global::num_out_frag_hets_both_sides_inconclusive;
+        }
+    }
+    if (frag_decision < 0)
+    {
+        ++global::num_out_frag_random;
+        frag_decision = lrand48() % 2;
     }
     return frag_decision;
 }
@@ -644,8 +638,7 @@ int process_mapping(bam1_t * rec_p)
                     else if (decision_m[p.first] != p.second)
                     {
                         ++(p.first->frag_conflicting);
-                        //decision_m.erase(p.first); //TODO: remove these
-                        decision_m[p.first] = 2;
+                        decision_m.erase(p.first);
                     }
                 }
                 decltype(decision_v) merged_decision_v(decision_m.begin(), decision_m.end());
@@ -743,13 +736,14 @@ void print_stats(ostream & os)
         << "....phased: " << global::num_out_map_unpaired_phased << endl
 
         << "..paired_fragments: " << global::num_out_frag_total << endl
-        << "....conflicting: " << global::num_out_frag_conflicting << endl
-        << "....inconclusive: " << global::num_out_frag_inconclusive << endl
+        << "....hets_neither_side: " << global::num_out_frag_hets_neither_side << endl
+        << "....hets_single_side: " << global::num_out_frag_hets_single_side << endl
+        << "......hets_single_side_inconclusive: " << global::num_out_frag_hets_single_side_inconclusive << endl
+        << "....hets_both_sides: " << global::num_out_frag_hets_both_sides << endl
+        << "......hets_both_sides_inconclusive: " << global::num_out_frag_hets_both_sides_inconclusive << endl
         << "....random: " << global::num_out_frag_random << endl
-        << "....single_sided: " << global::num_out_frag_single_sided << endl
-        << "....concordant: " << global::num_out_frag_concordant << endl
-        << "....missing_unmapped: " << global::num_out_frag_missing_unmapped << endl
         << "....missing_mapped: " << global::num_out_frag_missing_mapped << endl
+        << "....missing_unmapped: " << global::num_out_frag_missing_unmapped << endl
 
         << "..preset: " << global::num_out_map_preset << endl
         ;
