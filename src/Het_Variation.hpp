@@ -27,10 +27,10 @@ public:
             _allele_seq_v.emplace_back(rec_p->d.allele[i]);
         }
         _n_gt = bcf_get_genotypes(hdr_p, rec_p, &dat, &dat_size);
-        _is_het = (_n_gt == 2
-                   and not bcf_gt_is_missing(dat[0])
-                   and not bcf_gt_is_missing(dat[1])
-                   and bcf_gt_allele(dat[0]) != bcf_gt_allele(dat[1]));
+        _is_diploid = (_n_gt == 2
+                       and not bcf_gt_is_missing(dat[0])
+                       and not bcf_gt_is_missing(dat[1]));
+        _is_het = (_is_diploid and bcf_gt_allele(dat[0]) != bcf_gt_allele(dat[1]));
         if (_is_het)
         {
             for (int i = 0; i < 2; ++i)
@@ -51,7 +51,18 @@ public:
         else
         {
             // keep raw genotypes to be able to output them
-            _raw_gt.assign(dat, dat + dat_size);
+            if (_is_diploid)
+            {
+                // hom
+                for (int i = 0; i < 2; ++i)
+                {
+                    _raw_gt.push_back(bcf_gt_phased(bcf_gt_allele(dat[i])));
+                }
+            }
+            else
+            {
+                _raw_gt.assign(dat, dat + dat_size);
+            }
         }
         frag_total = 0;
         frag_supp_allele[0] = 0;
@@ -131,6 +142,7 @@ private:
     int _rf_start;
     int _rf_len;
     int _gt[2];
+    bool _is_diploid;
     bool _is_het;
     bool _is_phased;
     bool _is_snp; // true iff all of (potentially 3) alleles: ref, gt[0], gt[1] are length 1
