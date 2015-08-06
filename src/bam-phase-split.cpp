@@ -460,9 +460,13 @@ int get_majority_vote(const vector< pair< const Het_Variation *, int > > & decis
             ++cnt[p.second];
         }
     }
-    if (cnt[0] > 0 or cnt[1] > 0)
+    if (cnt[0] > cnt[1])
     {
-        return cnt[1] > cnt[0];
+        return 0;
+    }
+    else if (cnt[1] > cnt[0])
+    {
+        return 1;
     }
     else
     {
