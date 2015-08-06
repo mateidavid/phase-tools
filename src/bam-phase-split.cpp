@@ -364,7 +364,7 @@ int get_paired_decision(int decision, int mp_decision, int frag_decision)
         assert(frag_decision < -1);
         ++global::num_out_frag_hets_neither_side;
     }
-    if ((decision < -1) or (mp_decision < -1))
+    else if ((decision < -1) or (mp_decision < -1))
     {
         // one side has no hets
         assert(frag_decision == (decision >= -1? decision : mp_decision));
