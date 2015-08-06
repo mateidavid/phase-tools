@@ -642,7 +642,9 @@ int process_mapping(bam1_t * rec_p)
                     }
                 }
                 decltype(decision_v) merged_decision_v(decision_m.begin(), decision_m.end());
-                int frag_decision = get_majority_vote(merged_decision_v);
+                int frag_decision = (not decision_v.empty() or not mp_decision_v.empty()
+                                     ? get_majority_vote(merged_decision_v)
+                                     : -3);
                 frag_decision = get_paired_decision(decision, mp_decision, frag_decision);
                 implement_decision(mp_m_p, frag_decision, merged_decision_v);
                 implement_decision(&m, frag_decision, merged_decision_v);
