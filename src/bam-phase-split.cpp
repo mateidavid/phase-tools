@@ -355,15 +355,17 @@ int get_unpaired_decision(int decision)
     return decision;
 }
 
-int get_paired_decision(int decision, int mp_decision)
+int get_paired_decision(int decision, int mp_decision, int frag_decision)
 {
-    int frag_decision;
     ++global::num_out_frag_total;
     if (decision >= 0 and mp_decision >= 0 and decision != mp_decision)
     {
         // conflicting decisions
         ++global::num_out_frag_conflicting;
-        frag_decision = lrand48() % 2;
+        if (frag_decision < 0)
+        {
+            frag_decision = lrand48() % 2;
+        }
     }
     else if (decision < 0 or mp_decision < 0)
     {
@@ -377,19 +379,20 @@ int get_paired_decision(int decision, int mp_decision)
             {
                 ++global::num_out_frag_random;
             }
+            assert(frag_decision < 0);
             frag_decision = lrand48() % 2;
         }
         else
         {
             ++global::num_out_frag_single_sided;
-            frag_decision = decision >= 0? decision : mp_decision;
+            assert(frag_decision == (decision >= 0? decision : mp_decision));
         }
     }
     else
     {
         assert(decision >= 0 and mp_decision >= 0 and decision == mp_decision);
         ++global::num_out_frag_concordant;
-        frag_decision = decision;
+        assert(frag_decision == decision);
     }
     return frag_decision;
 }
@@ -418,7 +421,7 @@ void close_out_map_files(const string & chr_name)
         else
         {
             ++global::num_out_frag_missing_mapped;
-            decision = get_paired_decision(decision, -2);
+            decision = get_paired_decision(decision, -2, decision);
             implement_decision(m_p, decision, decision_v);
             bam_destroy1(m_p->rec_p());
             delete m_p;
@@ -451,6 +454,26 @@ void open_out_map_files(const string& chr_name)
         exit(EXIT_FAILURE);
     }
     LOG("main", info) << "opened output files for chr=[" << chr_name << "]" << endl;
+}
+
+int get_majority_vote(const vector< pair< const Het_Variation *, int > > & decision_v)
+{
+    int cnt[2] = {0, 0};
+    for (const auto & p : decision_v)
+    {
+        if (p.second >= 0 and p.second < 2)
+        {
+            ++cnt[p.second];
+        }
+    }
+    if (cnt[0] > 0 or cnt[1] > 0)
+    {
+        return cnt[1] > cnt[0];
+    }
+    else
+    {
+        return -1;
+    }
 }
 
 /**
@@ -565,7 +588,7 @@ int process_mapping(bam1_t * rec_p)
                 {
                     decision_v.push_back(make_pair(&*it, get_phase(m, *it)));
                 }
-                decision = decision_v.front().second;
+                decision = get_majority_vote(decision_v);
             }
             else
             {
@@ -588,7 +611,7 @@ int process_mapping(bam1_t * rec_p)
             {
                 // paired & 1st & 1st mapped & 2nd unmapped
                 // => implement decision & store it
-                decision = get_paired_decision(decision, -2);
+                decision = get_paired_decision(decision, -2, decision);
                 implement_decision(&m, decision, decision_v);
                 global::mp_store_m[m.query_name()] = make_tuple(nullptr, decision, decision_v);
                 return 0;
@@ -626,7 +649,8 @@ int process_mapping(bam1_t * rec_p)
                     }
                 }
                 decltype(decision_v) merged_decision_v(decision_m.begin(), decision_m.end());
-                int frag_decision = get_paired_decision(decision, mp_decision);
+                int frag_decision = get_majority_vote(merged_decision_v);
+                frag_decision = get_paired_decision(decision, mp_decision, frag_decision);
                 implement_decision(mp_m_p, frag_decision, merged_decision_v);
                 implement_decision(&m, frag_decision, merged_decision_v);
                 bam_destroy1(mp_m_p->rec_p());
