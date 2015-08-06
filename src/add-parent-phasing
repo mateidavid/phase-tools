@@ -40,6 +40,9 @@ class Genotype_Triple(object):
     def is_triple_diploid(self):
         return all([len(l) == 2 for l in self.gt])
     def compute_phase(self):
+        if not self.is_het():
+            self.phase = 0
+            return
         #
         # parent_support[i][j] == True iff child allele #i is present in parent #j
         #
@@ -78,28 +81,29 @@ class Genotype_Triple(object):
 
 def process_record(record, args):
     gtt = Genotype_Triple(record, args)
-    if not gtt.is_triple_diploid() or not gtt.is_het():
+    if not gtt.is_triple_diploid():
         return False
-    args.cnt['het'] += 1
-    gtt.compute_phase()
-    logging.debug('processing [' + record.CHROM + ':' + str(record.POS) + ']: ' + str(gtt.__dict__))
 
-    if gtt.phase < 0:
-        if 0 in gtt.parent_support_count:
-            args.cnt['zero_parent_support'] += 1
-        elif 1 not in gtt.parent_support_count:
-            args.cnt['ambiguous_phasing'] += 1
-        elif gtt.derived_parent_origin[0] == gtt.derived_parent_origin[1]:
-            args.cnt['double_parent_support'] += 1
+    gtt.compute_phase()
+    if gtt.is_het():
+        args.cnt['het'] += 1
+        logging.debug('processing [' + record.CHROM + ':' + str(record.POS) + ']: ' + str(gtt.__dict__))
+        if gtt.phase < 0:
+            if 0 in gtt.parent_support_count:
+                args.cnt['zero_parent_support'] += 1
+            elif 1 not in gtt.parent_support_count:
+                args.cnt['ambiguous_phasing'] += 1
+            elif gtt.derived_parent_origin[0] == gtt.derived_parent_origin[1]:
+                args.cnt['double_parent_support'] += 1
+            else:
+                assert False, "This line shouldn't be reached"
+            return False
         else:
-            assert False, "This line shouldn't be reached"
-        return False
-    else:
-        args.cnt['phased'] += 1
-        if -1 in gtt.parent_origin:
-            args.cnt['deduced_phasing'] += 1
-        else:
-            args.cnt['complete_phasing'] += 1
+            args.cnt['phased'] += 1
+            if -1 in gtt.parent_origin:
+                args.cnt['deduced_phasing'] += 1
+            else:
+                args.cnt['complete_phasing'] += 1
 
     new_gt = '|'.join((str(a) for a in gtt.gt[0][::[1, -1][gtt.phase]]))
     c = record.samples[args.child_idx]
