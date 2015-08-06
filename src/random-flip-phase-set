@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+
+import argparse
+import collections
+import logging
+import random
+import sys
+import vcf
+
+def process_record(r, args):
+    c = r.genotype(args.sample)
+    gt = c['GT']
+    if gt == None:
+        return
+    gts_l = [int(a) for a in gt.replace('|', '/').split('/')]
+    if len(gts_l) != 2 or gts_l[0] == gts_l[1] or '|' not in gt:
+        return
+    if 'PS' in c.data._fields and c['PS'] != None:
+        ps = c['PS']
+    else:
+        ps = 0
+    if ps == 0 and not args.flip_non_indexed:
+        return
+    if ps not in args.flip_d[r.CHROM]:
+        args.flip_d[r.CHROM][ps] = random.random() > .5
+        logging.info('flip decision for [' + r.CHROM + ':' + str(ps) + ']: [' + str(args.flip_d[r.CHROM][ps]) + ']')
+    flip = args.flip_d[r.CHROM][ps]
+    if not flip:
+        return
+    new_gt = '|'.join((str(a) for a in gts_l[::-1]))
+    c = r.samples[args.sample_idx]
+    new_c_data = c.data._replace(GT=new_gt)
+    r.samples[args.sample_idx] = vcf.model._Call(r, c.sample, new_c_data)
+
+def real_main(args):
+    # open input file
+    if args.input:
+        vcf_reader = vcf.Reader(filename=args.input)
+    else:
+        vcf_reader = vcf.Reader(fsock=sys.stdin)
+    logging.info('found INFO fields: ' + str([k for k in vcf_reader.infos.keys()]))
+    logging.info('found FORMAT fields: ' + str([k for k in vcf_reader.formats.keys()]))
+    logging.info('found SAMPLES: ' + str(vcf_reader.samples))
+
+    assert args.sample in vcf_reader.samples
+    args.sample_idx = vcf_reader.samples.index(args.sample)
+    args.flip_d = collections.defaultdict(dict)
+
+    # add FORMAT/PS field if not existing already
+    # if 'PS' not in vcf_reader.formats:
+    #     logging.info('adding FORMAT/PS field')
+    #     vcf_reader.formats['PS'] = vcf.parser._Format('PS', 1, 'Integer', 'Phase Set')
+
+    # open output file
+    if args.output:
+        vcf_writer = vcf.Writer(open(args.output, 'w'), vcf_reader)
+    else:
+        vcf_writer = vcf.Writer(sys.stdout, vcf_reader)
+
+    # iterate over records in input file
+    for r in vcf_reader:
+        # add FORMAT/PS field if not existing already
+        # format_l = record.FORMAT.split(':')
+        # if 'PS' not in format_l:
+        #     format_l.append('PS')
+        #     record.FORMAT = ':'.join(format_l)
+        #     new_samples = list()
+        #     new_c_data_fact = get_call_data_fact(record.FORMAT, format_l, record.samples[0].data)
+        #     for c in record.samples:
+        #         l = list(c.data) + [None]
+        #         new_samples.append(vcf.model._Call(record, c.sample, new_c_data_fact._make(l)))
+        #     record.samples = new_samples
+        # process current record
+        process_record(r, args)
+        vcf_writer.write_record(r)
+
+if __name__ == "__main__":
+    description = """
+    Given a VCF file, randomly flip each phase set. By default, the non-indexed phase set is not flipped.
+    """
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('--log-level', help='Logging level.')
+    parser.add_argument('--seed', type=int, help='Random seed.')
+    parser.add_argument('-o', '--output', help='Output VCF file [stdout].')
+    parser.add_argument('--sample', required=True, help='Sample ID to process.')
+    parser.add_argument('--flip-non-indexed', action='store_true', default=False, help='Flip non-indexed phase set as well.')
+    parser.add_argument('input', nargs='?', help='Input VCF file [stdin].')
+    args = parser.parse_args()
+
+    if args.log_level:
+        numeric_level = getattr(logging, args.log_level.upper(), None)
+        if not isinstance(numeric_level, int):
+            raise ValueError('Invalid log level: %s' % args.log_level)
+        logging.basicConfig(level=numeric_level)
+
+    if not args.seed:
+        args.seed = random.SystemRandom().randint(0, 2**32-1)
+        logging.info('using seed [' + str(args.seed) + ']')
+    random.seed(args.seed)
+
+    real_main(args)
