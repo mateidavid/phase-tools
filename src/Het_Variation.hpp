@@ -49,6 +49,8 @@ public:
                 int flip_phase = lrand48() % 2;
                 if (flip_phase) std::swap(_gt[0], _gt[1]);
             }
+            int gq_sz = bcf_get_format_int32(hdr_p, rec_p, "GQ", &dat, &dat_size);
+            _gq = (gq_sz == 1 and dat[0] != bcf_int32_missing? dat[0] : -1);
         }
         else
         {
@@ -83,6 +85,7 @@ public:
     int rf_len() const { return _rf_len; }
     int rf_end() const { return rf_start() + rf_len(); }
     int gt(int i) const { return _gt[i]; }
+    int gq() const { return _gq; }
     const std::vector< int > & raw_gt() const { return _raw_gt; }
     size_t n_alleles() const { return _allele_seq_v.size(); }
     bool is_het() const { return _is_het; }
@@ -124,7 +127,8 @@ public:
            << v.frag_total << "\t"
            << v.frag_supp_allele[0] << "\t" << v.frag_supp_allele[1] << "\t"
            << (v.frag_total - (v.frag_supp_allele[0] + v.frag_supp_allele[1])) << "\t"
-           << v.frag_conflicting;
+           << v.frag_conflicting << "\t"
+           << v.gq();
         return os;
     }
 
@@ -144,6 +148,7 @@ private:
     int _rf_start;
     int _rf_len;
     int _gt[2];
+    int _gq;
     bool _is_diploid;
     bool _is_het;
     bool _is_phased;

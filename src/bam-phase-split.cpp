@@ -457,21 +457,12 @@ int get_majority_vote(const vector< pair< const Het_Variation *, int > > & decis
     {
         if (p.second >= 0 and p.second < 2)
         {
-            ++cnt[p.second];
+            // use GQ as factor: put less weight on problematic sites
+            int factor = max(1 + p.first->gq(), 1);
+            cnt[p.second] += factor;
         }
     }
-    if (cnt[0] > cnt[1])
-    {
-        return 0;
-    }
-    else if (cnt[1] > cnt[0])
-    {
-        return 1;
-    }
-    else
-    {
-        return -1;
-    }
+    return cnt[0] == cnt[1]? -1 : cnt[1] > cnt[0];
 }
 
 /**
