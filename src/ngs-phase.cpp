@@ -208,10 +208,10 @@ double compute_coverage(const string & chrom)
 {
     size_t sum = 0;
     size_t n_hets = 1;
-    for (const auto & v : global::var_m[chrom])
+    for (const auto & v_p : global::het_m[chrom])
     {
         ++n_hets;
-        sum += v.frag_total;
+        sum += v_p->frag_total;
     }
     double res = (0.0 + sum) / n_hets;
     LOG("main", info) << "computed chromosome [" << chrom << "] coverage [" << res << "]" << endl;
