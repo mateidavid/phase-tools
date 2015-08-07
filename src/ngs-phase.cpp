@@ -49,6 +49,7 @@ namespace global
     MultiArg< string > map_fn("", "map", "Mappings (BAM) file.", true, "file", cmd_parser);
     ValueArg< string > out_var_fn("", "out", "Output variations file", true, "", "file", cmd_parser);
     ValueArg< string > sample_id("", "sample", "Sample Id.", true, "", "string", cmd_parser);
+    ValueArg< string > var_stats_fn("", "var-stats", "Variations stats file.", false, "", "file", cmd_parser);
     //
     // other parameters
     //
@@ -738,6 +739,11 @@ void real_main()
         process_chromosome(global::chr);
     }
     output_variations();
+    if (not global::var_stats_fn.get().empty())
+    {
+        strict_fstream::fstream tmp_fs(global::var_stats_fn, ios_base::out);
+        print_var_stats(tmp_fs);
+    }
     // cleanup
     fai_destroy(global::faidx_p);
 }
