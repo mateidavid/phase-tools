@@ -701,9 +701,9 @@ void print_var_stats(ostream & os)
 {
     if (global::chr.get().empty())
     {
-        for (const auto & s : global::het_m)
+        for (const auto & chrom : global::chrom_l)
         {
-            for(const auto & v_p : s.second)
+            for(const auto & v_p : global::het_m[chrom])
             {
                 os << *v_p << endl;
             }
@@ -711,12 +711,9 @@ void print_var_stats(ostream & os)
     }
     else
     {
-        if (global::het_m.count(global::chr))
+        for (const auto & v_p : global::het_m[global::chr])
         {
-            for (const auto & v_p : global::het_m.at(global::chr))
-            {
-                os << *v_p << endl;
-            }
+            os << *v_p << endl;
         }
     }
 }
