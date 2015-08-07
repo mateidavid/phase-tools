@@ -124,6 +124,7 @@ private:
     {
         size_t a = _count[0][0] + _count[1][1];
         size_t b = _count[0][1] + _count[1][0];
+        const double eps = 1.0e-5;
 
         if (a == 0 and b == 0)
         {
@@ -131,7 +132,7 @@ private:
         }
         else if (a == 0 or b == 0)
         {
-            _discordance = std::min(max_discordance(), 1.0 / (1.0 + a + b));
+            _discordance = std::min(max_discordance() - eps * (a + b), 1.0 / (1.0 + a + b));
         }
         else
         {
