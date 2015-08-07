@@ -774,6 +774,8 @@ int main(int argc, char * argv[])
         LOG("main", info) << "seed: " << global::seed << endl;
     }
     srand48(global::seed);
+    // set minimum allowable discordance
+    Phased_Set_Connection::max_discordance() = global::max_discordance;
     // real main
     real_main();
 }

@@ -104,6 +104,17 @@ public:
         return os;
     }
 
+    /*
+     * Set maximum discordance to be reported for connections with zero contrary evidence.
+     * This is needed in order to allow such connections to pass the discordance test,
+     * but with the maximum allowable discordance, ensuring they are processed last.
+     */
+    static double & max_discordance()
+    {
+        static double _max_discordance = .5;
+        return _max_discordance;
+    }
+
 private:
     const Phased_Set * _ps_ptr[2];
     size_t _count[2][2];
@@ -111,15 +122,20 @@ private:
 
     void recompute_discordance()
     {
-        size_t denom = _count[0][0] + _count[1][1] + _count[0][1] + _count[1][0];
-        if (denom == 0)
+        size_t a = _count[0][0] + _count[1][1];
+        size_t b = _count[0][1] + _count[1][0];
+
+        if (a == 0 and b == 0)
         {
-            _discordance = 1;
+            _discordance = 1.0;
+        }
+        else if (a == 0 or b == 0)
+        {
+            _discordance = std::min(max_discordance(), 1.0 / (1.0 + a + b));
         }
         else
         {
-            _discordance = static_cast< double >(std::min(_count[0][0] + _count[1][1], _count[0][1] + _count[1][0])) /
-                denom;
+            _discordance = (1.0 + std::min(a, b)) / (1.0 + a + b);
         }
     }
 }; // class Phased_Set_Connection
