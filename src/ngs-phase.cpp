@@ -145,8 +145,8 @@ void load_variations()
 
     // set up output header (copy contigs)
     bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
-    bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
     bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"Genotype Quality\">");
+    bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
     int n_seqs;
     auto seq_names = bcf_hdr_seqnames(hdr_p, &n_seqs);
     for (int i = 0; i < n_seqs; ++i)
@@ -242,8 +242,6 @@ void output_variations_chromosome(const string & chrom)
             odat[0] = bcf_gt_phased(v.gt(v.ps_phase));
             odat[1] = bcf_gt_phased(v.gt(1 - v.ps_phase));
             bcf_update_genotypes(global::ohdr_p, orec_p, odat, 2);
-            // set PS
-            bcf_update_format_int32(global::ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
             // set GQ
             int gq = 99;
             if (v.frag_total < coverage / 2
@@ -254,6 +252,8 @@ void output_variations_chromosome(const string & chrom)
                 gq = 0;
             }
             bcf_update_format_int32(global::ohdr_p, orec_p, "GQ", &gq, 1);
+            // set PS
+            bcf_update_format_int32(global::ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
         }
         else
         {
