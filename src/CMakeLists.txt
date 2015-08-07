@@ -160,6 +160,7 @@ add_custom_target(version ALL
 
 add_executable(bam-phase-split
     bam-phase-split.cpp
+    Phaser.cpp
     overlapper.cpp
     )
 target_link_libraries(bam-phase-split
@@ -172,6 +173,7 @@ add_dependencies(bam-phase-split
 
 add_executable(ngs-phase
     ngs-phase.cpp
+    Phaser.cpp
     overlapper.cpp
     )
 target_link_libraries(ngs-phase

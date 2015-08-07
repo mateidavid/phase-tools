@@ -4,7 +4,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <htslib/faidx.h>
 #include <htslib/vcf.h>
+#include <htslib/sam.h>
 
 #include "RC_Sequence.hpp"
 

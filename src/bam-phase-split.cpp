@@ -18,15 +18,13 @@
 #include "Het_Variation.hpp"
 #include "Cigar.hpp"
 #include "Mapping.hpp"
-#include "overlapper.h"
+#include "Phaser.hpp"
 
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION "missing_version"
 #endif
 
 using namespace std;
-
-typedef rc_sequence::Sequence< string > DNA_Sequence;
 
 namespace global
 {
@@ -193,6 +191,7 @@ void print_variations(ostream& os)
     }
 }
 
+/*
 int get_phase_snp(const Mapping & m, const Het_Variation & v)
 {
     assert(v.is_snp());
@@ -296,6 +295,7 @@ int get_phase(const Mapping & m, const Het_Variation & v)
     if (res >= 0) ++v.frag_supp_allele[res];
     return res;
 }
+*/
 
 void close_out_map_files();
 void open_out_map_files(const string&);
@@ -584,7 +584,7 @@ int process_mapping(bam1_t * rec_p)
                 // mapping spans at least one het
                 for (auto it = it_start; it != it_end; ++it)
                 {
-                    decision_v.push_back(make_pair(&*it, get_phase(m, *it)));
+                    decision_v.push_back(make_pair(&*it, Phaser::phase(m, *it)));
                 }
                 decision = get_majority_vote(decision_v);
             }

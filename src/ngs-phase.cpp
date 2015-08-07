@@ -20,15 +20,13 @@
 #include "Phased_Set_Connection.hpp"
 #include "Cigar.hpp"
 #include "Mapping.hpp"
-#include "overlapper.h"
+#include "Phaser.hpp"
 
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION "missing_version"
 #endif
 
 using namespace std;
-
-typedef rc_sequence::Sequence< string > DNA_Sequence;
 
 namespace global
 {
@@ -325,6 +323,7 @@ void print_variations(ostream& os)
     }
 }
 
+/*
 int get_phase_snp(const Mapping & m, const Het_Variation & v)
 {
     assert(v.is_snp());
@@ -419,7 +418,6 @@ int get_phase_indel(const Mapping & m, const Het_Variation & v)
 
 int get_phase(const Mapping & m, const Het_Variation & v)
 {
-    // for now, only deal with SNPs
     int res = v.is_snp()
         ? get_phase_snp(m, v)
         : get_phase_indel(m, v);
@@ -428,6 +426,7 @@ int get_phase(const Mapping & m, const Het_Variation & v)
     if (res >= 0) ++v.frag_supp_allele[res];
     return res;
 }
+*/
 
 /**
  * Process one mapping.
@@ -468,7 +467,7 @@ void process_mapping(const Mapping & m)
     for (auto it = it_start; it != it_end; ++it)
     {
         const Het_Variation & v = **it;
-        int phase = get_phase(m, v);
+        int phase = Phaser::phase(m, v);
         if (phase >= 0)
         {
             LOG("phasing", debug1)
