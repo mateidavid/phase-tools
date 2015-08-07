@@ -75,7 +75,6 @@ namespace global
     bcf_hdr_t * ohdr_p;
 
     // counts
-
     size_t num_in_map_total;
     size_t num_in_map_nonprimary;
     size_t num_in_map_unpaired;
@@ -146,6 +145,7 @@ void load_variations()
     // set up output header (copy contigs)
     bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
     bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase Set\">");
+    bcf_hdr_append(global::ohdr_p, "##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"Genotype Quality\">");
     int n_seqs;
     auto seq_names = bcf_hdr_seqnames(hdr_p, &n_seqs);
     for (int i = 0; i < n_seqs; ++i)
@@ -203,9 +203,24 @@ void load_variations()
     LOG("main", info) << "load_variations(): end" << endl;
 }
 
+double compute_coverage(const string & chrom)
+{
+    size_t sum = 0;
+    size_t n_hets = 1;
+    for (const auto & v : global::var_m[chrom])
+    {
+        ++n_hets;
+        sum += v.frag_total;
+    }
+    double res = (0.0 + sum) / n_hets;
+    LOG("main", info) << "computed chromosome [" << chrom << "] coverage [" << res << "]" << endl;
+    return res;
+}
+
 void output_variations_chromosome(const string & chrom)
 {
     int odat[2];
+    double coverage = compute_coverage(chrom);
     for (const auto & v : global::var_m[chrom])
     {
         assert(v.chr_name() == chrom);
@@ -228,6 +243,16 @@ void output_variations_chromosome(const string & chrom)
             bcf_update_genotypes(global::ohdr_p, orec_p, odat, 2);
             // set PS
             bcf_update_format_int32(global::ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
+            // set GQ
+            int gq = 99;
+            if (v.frag_total < coverage / 2
+                or v.frag_total > coverage * 2
+                or v.frag_supp_allele[0] < v.frag_total / 4
+                or v.frag_supp_allele[1] < v.frag_total / 4)
+            {
+                gq = 0;
+            }
+            bcf_update_format_int32(global::ohdr_p, orec_p, "GQ", &gq, 1);
         }
         else
         {
@@ -237,46 +262,6 @@ void output_variations_chromosome(const string & chrom)
         bcf_write1(global::of_p, global::ohdr_p, orec_p);
         bcf_destroy1(orec_p);
     }
-
-    /*
-    // transform output file
-    while (bcf_read1(if_p, ihdr_p, irec_p) >= 0)
-    {
-        bcf_unpack(irec_p, BCF_UN_ALL);
-        Het_Variation v2(ihdr_p, irec_p, dat, dat_size, false);
-        if (not v2.is_valid()
-            or (not global::chr.get().empty() and v2.chr_name() != global::chr.get()))
-        {
-            continue;
-        }
-        auto it = global::var_m[v2.chr_name()].find(Het_Variation(v2.rf_start()));
-        if (it == global::var_m[v2.chr_name()].end())
-        {
-            LOG("main", warning) << "did not find the following variation loaded during output:" << endl
-                                 << v2 << endl;
-            continue;
-        }
-        const Het_Variation & v = *it;
-        // update output record
-        auto orec_p = bcf_init1();
-        orec_p->rid = bcf_hdr_name2id(ohdr_p, v.chr_name().c_str());
-        orec_p->pos = irec_p->pos;
-        ostringstream oss;
-        for (size_t i = 0; i < v.n_alleles(); ++i)
-        {
-            oss << (i > 0? "," : "") << v.allele_seq(i);
-        }
-        bcf_update_alleles_str(ohdr_p, orec_p, oss.str().c_str());
-        // update GT
-        odat[0] = bcf_gt_phased(v.gt(v.ps_phase));
-        odat[1] = bcf_gt_phased(v.gt(1 - v.ps_phase));
-        bcf_update_genotypes(ohdr_p, orec_p, odat, 2);
-        // update PS
-        bcf_update_format_int32(ohdr_p, orec_p, "PS", &v.ps_start_1, 1);
-        bcf_write1(of_p, ohdr_p, orec_p);
-        bcf_destroy1(orec_p);
-    }
-    */
 }
 
 void output_variations()
