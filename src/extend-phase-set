@@ -33,6 +33,8 @@ class Genotype_Pair(object):
             self.gt[i] = [int(a) for a in gt.replace('|', '/').split('/')]
             if len(self.gt[i]) != 2:
                 continue
+            if 'GQ' in c.data._fields and c['GQ'] != None and c['GQ'] < args.min_gq:
+                continue
             if self.gt[i][0] != self.gt[i][1]:
                 if '|' in gt:
                     if 'PS' in c.data._fields and c['PS'] != None:
@@ -262,15 +264,16 @@ if __name__ == "__main__":
     """
 
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('--log-level', dest='log_level', help='Logging level.')
-    parser.add_argument('-i', '--input', action='store', default=None, help='Input VCF file [stdin].')
-    parser.add_argument('-o', '--output', action='store', default=None, help='Output VCF file [stdout].')
-    parser.add_argument('--base-id', action='store', required=True, help='Sample ID containing base phase set collection.')
-    parser.add_argument('--extra-id', action='store', required=True, help='Sample ID containing extra phase set collection.')
-    parser.add_argument('--parental-base-phase-set', action='store', type=int, default=None,
+    parser.add_argument('--log-level', help='Logging level.')
+    parser.add_argument('-i', '--input', help='Input VCF file [stdin].')
+    parser.add_argument('-o', '--output', help='Output VCF file [stdout].')
+    parser.add_argument('--base-id', required=True, help='Sample ID containing base phase set collection.')
+    parser.add_argument('--extra-id', required=True, help='Sample ID containing extra phase set collection.')
+    parser.add_argument('--parental-base-phase-set', type=int,
                         help='Base phase set containing parent-of-origin information. If given, this phase set is never flipped, and it is the only one that is extended.')
-    parser.add_argument('--extra-is-parent', action='store', type=int, default=None,
+    parser.add_argument('--extra-is-parent', type=int,
                         help='Extra phase set collection comes from parent of sample with the base phase set collection. The 0/1 argument is the phase corresponding to this parent in the parental base phase set. If given, parental_base_phase_set defaults to 0.')
+    parser.add_argument('--min-gq', type=int, default=10, help='Ignore sites with GQ less than this value.')
     args = parser.parse_args()
 
     if args.log_level:
