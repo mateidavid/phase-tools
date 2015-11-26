@@ -10,7 +10,6 @@
 #include <htslib/vcf.h>
 #include <htslib/sam.h>
 #include <tclap/CmdLine.h>
-#include "version.h"
 
 #include "zstr.hpp"
 #include "logger.hpp"

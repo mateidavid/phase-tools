@@ -33,8 +33,8 @@ set(PACKAGE "${PROJECT_NAME}")
 set(PACKAGE_NAME "${PROJECT_NAME}")
 set(PACKAGE_TARNAME "${PROJECT_NAME}")
 set(PACKAGE_STRING "${PACKAGE_NAME} ${PACKAGE_VERSION}")
-set(OPTIONAL_SUBMODULE_DIR ${PROJECT_SOURCE_DIR}/optional CACHE INTERNAL "Directory for downloading and building optional submodules")
-set(OPTIONAL_SUBMODULE_PREFIX ${PROJECT_SOURCE_DIR}/optional-prefix CACHE INTERNAL "Directory for installing optional submodules")
+set(OPTIONAL_SUBMODULE_PREFIX ${PROJECT_SOURCE_DIR}/optional
+    CACHE INTERNAL "Directory for installing optional submodules.")
 
 set(HEADER_SUBDIRS
     common thirdparty version
@@ -42,6 +42,11 @@ set(HEADER_SUBDIRS
 set(SUBDIRS
     bam-phase-split common ngs-phase scripts thirdparty version
     CACHE INTERNAL "Subdirectories to descend into")
+
+if(NOT ${CMAKE_INSTALL_PREFIX})
+    set(CMAKE_INSTALL_PREFIX ${PROJECT_BINARY_DIR})
+endif()
+message(STATUS "Using install prefix: ${CMAKE_INSTALL_PREFIX}")
 
 ### Resolve external dependencies
 #
@@ -59,34 +64,32 @@ find_package(ZLIB REQUIRED)
 # check for HTSLib
 # => HTSLib_INCLUDE_DIR, HTSLib_LIBRARY
 if(BUILD_HTSLIB)
-    message(STATUS "Building HTSLib in: ${PROJECT_SOURCE_DIR}/htslib")
-    ExternalProject_Add(HTSLib
-        SOURCE_DIR ${PROJECT_SOURCE_DIR}/htslib
-        CONFIGURE_COMMAND ""
-        BUILD_IN_SOURCE 1
-        BUILD_COMMAND make lib-static
-        INSTALL_COMMAND ""
-        )
-    set(HTSLib_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/htslib)
-    set(HTSLib_LIBRARY ${PROJECT_SOURCE_DIR}/htslib/${CMAKE_STATIC_LIBRARY_PREFIX}hts${CMAKE_STATIC_LIBRARY_SUFFIX})
+    include(BuildHTSLib)
+    build_htslib(PREFIX ${OPTIONAL_SUBMODULE_PREFIX}
+        URL ${HTSLIB_URL})
 else()
     find_package(HTSLib REQUIRED)
 endif()
 
-# check for Boost 1.57
+# check for Boost headers
 # => Boost_INCLUDE_DIRS, Boost_<COMPONENT>_LIBRARY
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND "${Boost_COMPILER}" STREQUAL "")
-    message(WARNING
-        "The cmake FindBoost package does not properly detect the compiler name when using CLang. Boost libraries built with 'versioned' layout (compiler name in library name, e.g. 'libboost_program_options-clang35-mt-1_57.so') might be incorrectly detected. To find such libraries, give the compiler name on the cmake command line, e.g. 'cmake -DBoost_COMPILER=\"-clang35\" [...]'. To check which libraries have been detected, use: 'grep libboost_program_options CMakeCache.txt'")
+if(BUILD_BOOST)
+    include(BuildBoost)
+    set(BOOST_VERSION 1.59.0 CACHE STRING "Boost version to build.")
+    build_boost(PREFIX ${OPTIONAL_SUBMODULE_PREFIX}
+        VERSION ${BOOST_VERSION}
+        URL ${BOOST_URL}
+        )
+else()
+    # Use static libraries to avoid LD_RUN_PATH issues
+    #set(Boost_USE_STATIC_LIBS true)
+    #find_package(Boost 1.57.0 EXACT REQUIRED COMPONENTS iostreams program_options)
+    find_package(Boost 1.57.0 REQUIRED)
+    if(NOT Boost_FOUND)
+        message(FATAL_ERROR "Boost not found")
+    endif()
 endif()
-set(BOOST_ROOT "$ENV{BOOST_ROOT}" CACHE PATH "Path to Boost")
-# Use static libraries to avoid LD_RUN_PATH issues
-#set(Boost_USE_STATIC_LIBS true)
-#find_package(Boost 1.57.0 EXACT REQUIRED COMPONENTS iostreams program_options)
-find_package(Boost 1.57.0 EXACT REQUIRED)
-if(NOT Boost_FOUND)
-    message(FATAL_ERROR "Boost 1.57.0 not found")
-endif()
+message(STATUS "Using Boost headers in: ${Boost_INCLUDE_DIRS}")
 
 ### Prepare default compilation flags
 #
