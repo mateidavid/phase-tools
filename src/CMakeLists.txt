@@ -1,15 +1,26 @@
-message(STATUS "Processing: main")
+message(STATUS "Processing: ${CMAKE_CURRENT_SOURCE_DIR}")
+
+# set build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING
+       "Choose the type of build, options are: Debug Test Release GProf GProfRel."
+       FORCE)
+endif()
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+if(NOT ${CMAKE_BUILD_TYPE} AND NOT ${CMAKE_BUILD_TYPE} STREQUAL "Release")
+    set(CMAKE_VERBOSE_MAKEFILE TRUE CACHE BOOL "Enable verbose make output.")
+    message(STATUS "Enabling verbose make output.")
+endif()
 
 cmake_minimum_required(VERSION 2.8.12)
-set(CMAKE_VERBOSE_MAKEFILE TRUE CACHE BOOL "Enable verbose make output.") #TODO: remove
 project(BAM_PHASE_SPLIT C CXX)
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules")
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
 include(CheckLibraryExists)
 include(CheckIncludeFileCXX)
 include(ExternalProject)
 
 # check main file exists; if not, assume the source dir is wrong
-if(NOT EXISTS "${PROJECT_SOURCE_DIR}/bam-phase-split.cpp")
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/bam-phase-split/bam-phase-split.cpp")
     message(FATAL_ERROR "${PROJECT_SOURCE_DIR}: source files not found")
 endif()
 
@@ -26,10 +37,11 @@ set(OPTIONAL_SUBMODULE_DIR ${PROJECT_SOURCE_DIR}/optional CACHE INTERNAL "Direct
 set(OPTIONAL_SUBMODULE_PREFIX ${PROJECT_SOURCE_DIR}/optional-prefix CACHE INTERNAL "Directory for installing optional submodules")
 
 set(HEADER_SUBDIRS
-    ${PROJECT_SOURCE_DIR}
+    common thirdparty version
     CACHE INTERNAL "Subdirectories containing header files")
-#set(SUBDIRS
-#    CACHE INTERNAL "Subdirectories to descend into")
+set(SUBDIRS
+    bam-phase-split common ngs-phase scripts thirdparty version
+    CACHE INTERNAL "Subdirectories to descend into")
 
 ### Resolve external dependencies
 #
@@ -37,28 +49,28 @@ set(HEADER_SUBDIRS
 #set(CMAKE_FIND_LIBRARY_SUFFIXES .a .so)
 
 # bake-in RPATH to prevent library search problems
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH true)
-set(CMAKE_BUILD_WITH_INSTALL_RPATH true)
+#set(CMAKE_INSTALL_RPATH_USE_LINK_PATH true)
+#set(CMAKE_BUILD_WITH_INSTALL_RPATH true)
 
 # find zlib
 # => ZLIB_INCLUDE_DIRS, ZLIB_LIBRARIES
 find_package(ZLIB REQUIRED)
 
-# check for HTSlib
-# => HTSlib_INCLUDE_DIR, HTSlib_LIBRARY
+# check for HTSLib
+# => HTSLib_INCLUDE_DIR, HTSLib_LIBRARY
 if(BUILD_HTSLIB)
-    message(STATUS "Building HTSlib in: ${PROJECT_SOURCE_DIR}/htslib")
-    ExternalProject_Add(HTSlib
+    message(STATUS "Building HTSLib in: ${PROJECT_SOURCE_DIR}/htslib")
+    ExternalProject_Add(HTSLib
         SOURCE_DIR ${PROJECT_SOURCE_DIR}/htslib
         CONFIGURE_COMMAND ""
         BUILD_IN_SOURCE 1
         BUILD_COMMAND make lib-static
         INSTALL_COMMAND ""
         )
-    set(HTSlib_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/htslib)
-    set(HTSlib_LIBRARY ${PROJECT_SOURCE_DIR}/htslib/${CMAKE_STATIC_LIBRARY_PREFIX}hts${CMAKE_STATIC_LIBRARY_SUFFIX})
+    set(HTSLib_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/htslib)
+    set(HTSLib_LIBRARY ${PROJECT_SOURCE_DIR}/htslib/${CMAKE_STATIC_LIBRARY_PREFIX}hts${CMAKE_STATIC_LIBRARY_SUFFIX})
 else()
-    find_package(HTSlib REQUIRED)
+    find_package(HTSLib REQUIRED)
 endif()
 
 # check for Boost 1.57
@@ -76,33 +88,24 @@ if(NOT Boost_FOUND)
     message(FATAL_ERROR "Boost 1.57.0 not found")
 endif()
 
-### Build configuration file
-#
-# check for clock_gettime()
-# => HAVE_CLOCK_GETTIME
-check_library_exists(rt clock_gettime "" HAVE_CLOCK_GETTIME)
-
-# generate configuration file
-configure_file(config.h.cmake.in config.h)
-
 ### Prepare default compilation flags
 #
 # headers
 include_directories(SYSTEM
     ${ZLIB_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
-    ${HTSlib_INCLUDE_DIR}
+    ${HTSLib_INCLUDE_DIR}
     tclap/include
-    zstr/src)
+    hpptools/include)
 include_directories(
-    ${PROJECT_SOURCE_DIR}
+    ${HEADER_SUBDIRS}
     ${PROJECT_BINARY_DIR})
 get_directory_property(include_directories INCLUDE_DIRECTORIES)
 message(STATUS "INCLUDE_DIRECTORIES='${include_directories}'")
 
 ### general compile flags
 #
-set(EXTRA_FLAGS "-std=c++11 -Wall -Wextra -pedantic -pthread")
+set(EXTRA_FLAGS "-std=c++11 -pthread -Wall -Wextra -pedantic")
 
 # compiler-specific flags
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
@@ -112,41 +115,29 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
 endif()
 
 # consolidate flags
-set(CMAKE_C_FLAGS "$ENV{CFLAGS} ${EXTRA_FLAGS}")
 set(CMAKE_CXX_FLAGS "$ENV{CXXFLAGS} ${EXTRA_FLAGS}")
 message(STATUS "CMAKE_CXX_FLAGS='${CMAKE_CXX_FLAGS}'")
 
 ### build-specific flags
 #
-# compile flags for Debug build
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggdb -fno-inline -fno-eliminate-unused-debug-types")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-# compile flags for Test build
 set(CMAKE_CXX_FLAGS_TEST "-O3 -g3")
-set(CMAKE_C_FLAGS_TEST "${CMAKE_CXX_FLAGS_TEST}")
 set(CMAKE_CXX_FLAGS_TEST_O2 "-O2 -g3")
-set(CMAKE_C_FLAGS_TEST_O2 "${CMAKE_CXX_FLAGS_TEST_O2}")
 set(CMAKE_CXX_FLAGS_TEST_O1 "-O1 -g3")
-set(CMAKE_C_FLAGS_TEST_O1 "${CMAKE_CXX_FLAGS_TEST_O1}")
-# compile flags for GProf build
-set(CMAKE_CXX_FLAGS_GPROF "-O3 -g3 -pg")
-set(CMAKE_C_FLAGS_GPROF "${CMAKE_CXX_FLAGS_GPROF}")
-# compile flags for Release build
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -DDISABLE_ASSERTS")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-# compile flags for GProfRel build
+set(CMAKE_CXX_FLAGS_GPROF "-O3 -g3 -pg")
 set(CMAKE_CXX_FLAGS_GPROFREL "-O3 -DNDEBUG -DDISABLE_ASSERTS -pg")
-set(CMAKE_C_FLAGS_GPROFREL "${CMAKE_CXX_FLAGS_GPROF}")
 
 # link flags
-#set(CMAKE_EXE_LINKER_FLAGS "-Wl,-rpath=$ENV{LD_RUN_PATH} -Wl,--as-needed -static-libgcc -static-libstdc++")
+#set(CMAKE_EXE_LINKER_FLAGS "-Wl,-rpath=$ENV{LD_RUN_PATH} -Wl,--as-needed")
 set(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed")
 message(STATUS "CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
 
 ### Add target that updates version
 #
-add_custom_target(version ALL
-    ${CMAKE_COMMAND} -DSRC_ROOT=${PROJECT_SOURCE_DIR} -DBIN_ROOT=${PROJECT_BINARY_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/update-version.cmake)
+add_custom_target(package_version
+    ${PROJECT_SOURCE_DIR}/get-dir-version -v -d ${PROJECT_SOURCE_DIR} -r ${PROJECT_SOURCE_DIR}/.. -o ${PROJECT_BINARY_DIR}/package_version.h -t PACKAGE_VERSION
+    )
 
 ### Enable testing targets
 #
@@ -154,37 +145,6 @@ add_custom_target(version ALL
 
 ### Descend into subdirectories
 #
-#foreach(dir ${SUBDIRS})
-#    add_subdirectory(${dir})
-#endforeach()
-
-add_executable(bam-phase-split
-    bam-phase-split.cpp
-    Phaser.cpp
-    overlapper.cpp
-    )
-target_link_libraries(bam-phase-split
-    ${HTSlib_LIBRARY}
-    ${ZLIB_LIBRARIES}
-    )
-add_dependencies(bam-phase-split
-    version
-    )
-
-add_executable(ngs-phase
-    ngs-phase.cpp
-    Phaser.cpp
-    overlapper.cpp
-    )
-target_link_libraries(ngs-phase
-    ${HTSlib_LIBRARY}
-    ${ZLIB_LIBRARIES}
-    )
-add_dependencies(ngs-phase
-    version
-    )
-
-file(COPY add-parent-phasing DESTINATION .)
-file(COPY extend-phase-set DESTINATION .)
-file(COPY random-flip-phase-set DESTINATION .)
-file(COPY collapse-phase-sets DESTINATION .)
+foreach(dir ${SUBDIRS})
+    add_subdirectory(${dir})
+endforeach()

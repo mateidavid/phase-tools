@@ -21,10 +21,7 @@
 #include "Cigar.hpp"
 #include "Mapping.hpp"
 #include "Phaser.hpp"
-
-#ifndef PACKAGE_VERSION
-#define PACKAGE_VERSION "missing_version"
-#endif
+#include "version.hpp"
 
 using namespace std;
 
@@ -35,7 +32,7 @@ namespace global
     string description =
         "Given a VCF file of variants and one or more BAM files with NGS reads, "
         "compute phased genotypes directly supported by the reads.";
-    CmdLine cmd_parser(description, ' ', PACKAGE_VERSION);
+    CmdLine cmd_parser(description, ' ', package_version);
     //
     // general parameters
     //
@@ -641,7 +638,7 @@ void process_chromosome(const string & chr)
         conn_map.erase(ps2_ptr);
         LOG("phasing", debug1) << "merged phased set: " << *ps1_ptr << endl;
     }
-    if (Logger::get_facility_level("phasing") >= Logger::level::debug1)
+    if (logger::Logger::get_facility_level("phasing") >= logger::debug1)
     {
         for (const auto & c : conn_set)
         {
@@ -749,7 +746,7 @@ int main(int argc, char * argv[])
 {
     global::cmd_parser.parse(argc, argv);
     // set log levels
-    Logger::set_levels_from_options(global::log_level, &clog);
+    logger::Logger::set_levels_from_options(global::log_level, &clog);
     // print options
     LOG("main", info) << "program: " << global::cmd_parser.getProgramName() << endl;
     LOG("main", info) << "version: " << global::cmd_parser.getVersion() << endl;

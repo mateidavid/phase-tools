@@ -15,10 +15,10 @@ class Phased_Set_Connection
 {
 public:
     Phased_Set_Connection()
-        : _ps_ptr{nullptr, nullptr}, _count{0, 0, 0, 0}, _discordance(1.0)
+        : _ps_ptr{nullptr, nullptr}, _count{ { 0, 0 }, { 0, 0 } }, _discordance(1.0)
     {}
     Phased_Set_Connection(const Phased_Set * ps0_ptr, const Phased_Set * ps1_ptr)
-        : _ps_ptr{ps0_ptr, ps1_ptr}, _count{0, 0, 0, 0}, _discordance(1.0)
+        : _ps_ptr{ps0_ptr, ps1_ptr}, _count{ { 0, 0 }, { 0, 0 } }, _discordance(1.0)
     {}
 
     const Phased_Set * ps_ptr(int i) const { return _ps_ptr[i]; }

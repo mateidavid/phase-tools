@@ -12,8 +12,7 @@ class Mapping
 public:
     Mapping() : _rec_p(nullptr) {}
     Mapping(const bam_hdr_t * hdr_p, bam1_t * rec_p)
-        : _hdr_p(hdr_p),
-          _rec_p(rec_p)
+        : _rec_p(rec_p)
     {
         _query_name = bam_get_qname(rec_p);
         _flag = rec_p->core.flag;
@@ -73,7 +72,6 @@ public:
     }
 
 private:
-    const bam_hdr_t * _hdr_p;
     bam1_t * _rec_p;
     std::string _query_name;
     std::string _chr_name;
@@ -85,7 +83,5 @@ private:
     int _rf_len;
     int _mp_rf_start;
 }; // class Mapping
-
-
 
 #endif

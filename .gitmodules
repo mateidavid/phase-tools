@@ -4,6 +4,6 @@
 [submodule "src/tclap"]
 	path = src/tclap
 	url = https://github.com/mateidavid/tclap.git
-[submodule "src/zstr"]
-	path = src/zstr
-	url = https://github.com/mateidavid/zstr.git
+[submodule "src/hpptools"]
+	path = src/hpptools
+	url = https://github.com/mateidavid/hpptools.git

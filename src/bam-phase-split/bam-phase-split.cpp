@@ -19,10 +19,7 @@
 #include "Cigar.hpp"
 #include "Mapping.hpp"
 #include "Phaser.hpp"
-
-#ifndef PACKAGE_VERSION
-#define PACKAGE_VERSION "missing_version"
-#endif
+#include "version.hpp"
 
 using namespace std;
 
@@ -35,7 +32,7 @@ namespace global
         "into several other BAM files. Specifically, for every phase set (PS) defined in the VCF file, "
         "and for every autosome (1-22), there will be 2 BAM output files (1 per haplotype). "
         "In addition, there will be 2 more overflow BAM output files for reads not mapped to autosomes.";
-    CmdLine cmd_parser(description, ' ', PACKAGE_VERSION);
+    CmdLine cmd_parser(description, ' ', package_version);
     //
     // general parameters
     //
@@ -791,7 +788,7 @@ int main(int argc, char * argv[])
 {
     global::cmd_parser.parse(argc, argv);
     // set log levels
-    Logger::set_levels_from_options(global::log_level, &clog);
+    logger::Logger::set_levels_from_options(global::log_level, &clog);
     // print options
     LOG("main", info) << "program: " << global::cmd_parser.getProgramName() << endl;
     LOG("main", info) << "version: " << global::cmd_parser.getVersion() << endl;
