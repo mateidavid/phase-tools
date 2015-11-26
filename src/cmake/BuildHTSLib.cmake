@@ -25,7 +25,7 @@ function(build_htslib)
         set(htslib_source URL ${build_htslib_URL})
     else()
         #set(htslib_source GIT_REPOSITORY https://github.com/samtools/htslib.git GIT_TAG 1.2.1)
-        set(htslib_source URL https://github.com/samtools/htslib/releases/download/1.2.1/htslib-1.2.1.tar.bz2)
+        set(htslib_source URL http://github.com/samtools/htslib/releases/download/1.2.1/htslib-1.2.1.tar.bz2)
     endif()
     message(STATUS "Building HTSLib (${htslib_source}) in: ${build_htslib_PREFIX}")
 
