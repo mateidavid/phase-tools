@@ -33,7 +33,7 @@ make install
 
 By default, the programs are installed with the same prefix as the build directory. Effectively, this means they will be available in the =bin= subdirectory of the build directory. To specify a custom install directory, use =-DCMAKE_INSTALL_PREFIX=/some/prefix=. In this case, the programs will be installed in =/some/prefix/bin=.
 
-**** Contents
+**** Programs
 
 The following programs are part of this collection. For detailed command-line parameters, use =--help=.
 
@@ -60,3 +60,7 @@ Given a VCF file, collapse all phase sets into one.
 ***** random-flip-phase-set
 
 Given a VCF file, randomly flip each phase set.
+
+**** Samples
+
+Input and output samples are available in [[samples]].
