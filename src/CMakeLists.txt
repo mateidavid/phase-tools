@@ -94,9 +94,9 @@ message(STATUS "Using Boost headers in: ${Boost_INCLUDE_DIRS}")
 #
 # headers
 include_directories(SYSTEM
-    ${ZLIB_INCLUDE_DIRS}
-    ${Boost_INCLUDE_DIRS}
     ${HTSLib_INCLUDE_DIRS}
+    ${Boost_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIRS}
     tclap/include
     hpptools/include)
 include_directories(
