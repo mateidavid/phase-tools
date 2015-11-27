@@ -27,7 +27,7 @@ public:
             _cigar = Cigar(bam_get_cigar(rec_p), rec_p->core.n_cigar);
             _rf_len = _cigar.rf_len();
         }
-        if (mp_is_mapped())
+        if (is_paired() and mp_is_mapped())
         {
             _mp_chr_name = hdr_p->target_name[rec_p->core.mtid];
             _mp_rf_start = rec_p->core.mpos;
