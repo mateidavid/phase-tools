@@ -1,0 +1,62 @@
+# -*- mode:org; mode:visual-line; coding:utf-8; -*-
+
+*** Bam-Phase-Split
+
+This is a collection of programs for identifying and manipulating phase sets, and for separating phased mappings.
+
+**** Installation
+
+The prerequisites for installing this collection are:
+
+- A C++11 toolchain. Recent versions of =gcc= and =clang= can be used.
+
+- =cmake= version at least =2.8.12= for configuration.
+
+- =zlib=.
+
+- =boost= header-only libraries, version at least =1.57.0= (optional). If available in a nonstandard location, that can be specified with =-DBOOST_ROOT=/some/path= argument to =cmake=. If not available, the libraries can be downloaded and built with =-DBUILD_BOOST=1= (note- this requires about 700MB of disk space).
+
+- =htslib= library (optional). If available in a nonstandard location, that can be specified with =-DHTSLIB_ROOT=/some/path=. If not available, the library can be downloaded and built with =-DBUILD_HTSLIB=1=.
+
+To configure, build, and install the programs in this suite, use:
+#+BEGIN_EXAMPLE
+# get the git repository along with submodules
+cd /some/path
+git clone --recursive https://github.com/mateidavid/bam-phase-split.git
+cd bam-phase-split
+mkdir build && cd build
+cmake ../src [ -DHTSLIB_ROOT=/path/to/htslib | -DBUILD_HTSLIB=1 ] [ -DBOOST_ROOT=/path/to/boost | -DBUILD_BOOST=1 ]
+make
+make install
+/some/path/bam-phase-split/build/bin/bam-phase-split --version
+#+END_EXAMPLE
+
+By default, the programs are installed with the same prefix as the build directory. Effectively, this means they will be available in the =bin= subdirectory of the build directory. To specify a custom install directory, use =-DCMAKE_INSTALL_PREFIX=/some/prefix=. In this case, the programs will be installed in =/some/prefix/bin=.
+
+**** Contents
+
+The following programs are part of this collection. For detailed command-line parameters, use =--help=.
+
+***** add-parent-phasing
+
+Given a VCF file containing genotype calls from a trio of individuals, phase the calls in the child using the calls in the parents. Concretely, for every heterozygous call in the child, if at least one of the 2 alleles can be unambiguously assigned to one of the parents, the call in the child is phased as =a:b=, meaning allele =a= came from parent 1 and allele =b= came from parent 2. The calls are assigned to the unnamed phase set in the VCF file (i.e, no =PS= format field).
+
+***** ngs-phase
+
+Given a VCF file of variants from one sample, and one or more BAM files of read mappings, compute phased genotypes directly supported by NGS reads.
+
+***** bam-phase-split
+
+Given a BAM file of read mappings and a (partly) phased VCF file of variants, split the mappings in the BAM file into several other BAM files. Specifically, for every phase set (PS) defined in the VCF file, and for every autosome (1-22), there will be 2 BAM output files (1 per haplotype) containing the mappings of reads assigned to that phase. In addition, there will be 2 more overflow BAM output files for reads not mapped to autosomes. Mappings which cannot be phased (e.g., not spanning any heterozygous sites) will be assigned to one of the phases at random.
+
+***** extend-phase-set
+
+Given a VCF file containing 2 phase set collections (stored as different sample columns), extend the phase sets of the "base" collection using the phase sets of the "extra" collection.
+
+***** collapse-phase-sets
+
+Given a VCF file, collapse all phase sets into one.
+
+***** random-flip-phase-set
+
+Given a VCF file, randomly flip each phase set.
