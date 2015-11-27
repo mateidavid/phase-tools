@@ -5,7 +5,7 @@ target_link_libraries(ngs-phase
     common
     thirdparty
     version
-    ${HTSLib_LIBRARY}
+    ${HTSLib_LIBRARIES}
     ${ZLIB_LIBRARIES}
     )
 

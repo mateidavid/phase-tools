@@ -33,9 +33,9 @@ set(PACKAGE "${PROJECT_NAME}")
 set(PACKAGE_NAME "${PROJECT_NAME}")
 set(PACKAGE_TARNAME "${PROJECT_NAME}")
 set(PACKAGE_STRING "${PACKAGE_NAME} ${PACKAGE_VERSION}")
+
 set(OPTIONAL_SUBMODULE_PREFIX ${PROJECT_SOURCE_DIR}/optional
     CACHE INTERNAL "Directory for installing optional submodules.")
-
 set(HEADER_SUBDIRS
     common thirdparty version
     CACHE INTERNAL "Subdirectories containing header files")
@@ -65,8 +65,7 @@ find_package(ZLIB REQUIRED)
 # => HTSLib_INCLUDE_DIR, HTSLib_LIBRARY
 if(BUILD_HTSLIB)
     include(BuildHTSLib)
-    build_htslib(PREFIX ${OPTIONAL_SUBMODULE_PREFIX}
-        URL ${HTSLIB_URL})
+    build_htslib(PREFIX ${OPTIONAL_SUBMODULE_PREFIX} URL ${HTSLIB_URL})
 else()
     find_package(HTSLib REQUIRED)
 endif()
@@ -97,7 +96,7 @@ message(STATUS "Using Boost headers in: ${Boost_INCLUDE_DIRS}")
 include_directories(SYSTEM
     ${ZLIB_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
-    ${HTSLib_INCLUDE_DIR}
+    ${HTSLib_INCLUDE_DIRS}
     tclap/include
     hpptools/include)
 include_directories(

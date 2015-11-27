@@ -5,7 +5,7 @@ target_link_libraries(bam-phase-split
     common
     thirdparty
     version
-    ${HTSLib_LIBRARY}
+    ${HTSLib_LIBRARIES}
     ${ZLIB_LIBRARIES}
     )
 
