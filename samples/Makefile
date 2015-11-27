@@ -42,7 +42,7 @@ test.ngs-phase: ${INSTALL_DIR}/bin/ngs-phase test.ngs-phase.0.in.fa.fai test.ngs
 	@echo "$@: all tests passed"
 
 test.bam-phase-split: ${INSTALL_DIR}/bin/bam-phase-split test.bam-phase-split.0.in.fa.fai test.bam-phase-split.0.in.bam.bai
-	${INSTALL_DIR}/bin/bam-phase-split --ref test.bam-phase-split.0.in.fa --var test.bam-phase-split.0.in.vcf --map test.bam-phase-split.0.in.bam --sample HG002 --out out.test.bam-phase-split.0
+	${INSTALL_DIR}/bin/bam-phase-split --ref test.bam-phase-split.0.in.fa --var test.bam-phase-split.0.in.vcf --map test.bam-phase-split.0.in.bam --sample HG002 --out out.test.bam-phase-split.0 >/dev/null
 	diff test.bam-phase-split.0.out.1.0.sam <(samtools view -h out.test.bam-phase-split.0.1.0.bam)
 	diff test.bam-phase-split.0.out.1.1.sam <(samtools view -h out.test.bam-phase-split.0.1.1.bam)
 	@echo "$@: all tests passed"
