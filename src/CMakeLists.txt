@@ -13,7 +13,7 @@ if(NOT ${CMAKE_BUILD_TYPE} AND NOT ${CMAKE_BUILD_TYPE} STREQUAL "Release")
 endif()
 
 cmake_minimum_required(VERSION 2.8.12)
-project(BAM_PHASE_SPLIT C CXX)
+project(PHASE_TOOLS C CXX)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
 include(CheckLibraryExists)
 include(CheckIncludeFileCXX)

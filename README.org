@@ -1,6 +1,6 @@
 # -*- mode:org; mode:visual-line; coding:utf-8; -*-
 
-*** Bam-Phase-Split
+*** Phase Tools
 
 This is a collection of programs for identifying and manipulating phase sets, and for separating phased mappings.
 
@@ -22,13 +22,13 @@ To configure, build, and install the programs in this suite, use:
 #+BEGIN_EXAMPLE
 # get the git repository along with submodules
 cd /some/path
-git clone --recursive https://github.com/mateidavid/bam-phase-split.git
-cd bam-phase-split
+git clone --recursive https://github.com/mateidavid/phase-tools.git
+cd phase-tools
 mkdir build && cd build
 cmake ../src [ -DHTSLIB_ROOT=/path/to/htslib | -DBUILD_HTSLIB=1 ] [ -DBOOST_ROOT=/path/to/boost | -DBUILD_BOOST=1 ]
 make
 make install
-/some/path/bam-phase-split/build/bin/bam-phase-split --version
+/some/path/phase-tools/build/bin/bam-phase-split --version
 #+END_EXAMPLE
 
 By default, the programs are installed with the same prefix as the build directory. Effectively, this means they will be available in the =bin= subdirectory of the build directory. To specify a custom install directory, use =-DCMAKE_INSTALL_PREFIX=/some/prefix=. In this case, the programs will be installed in =/some/prefix/bin=.
