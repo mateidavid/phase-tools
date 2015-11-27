@@ -3,7 +3,7 @@
 ##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase Set">
 ##contig=<ID=1,length=100000>
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HG002_base	HG002_extra
-1	1001	.	A	C	.	.	.	GT:PS	0/1:.	0/0:.
+1	1001	.	A	C	.	.	.	GT:PS	0|1:1001	0/0:.
 1	1101	.	A	C,G	.	.	.	GT:PS	0/1:.	1/2:.
 1	2001	.	A	C	.	.	.	GT:PS	0|1:2001	0/1:.
 1	3001	.	A	C	.	.	.	GT:PS	0|1:3001	0|1:.
