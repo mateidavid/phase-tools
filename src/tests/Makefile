@@ -31,7 +31,7 @@ test.extend-phase-set: ${INSTALL_DIR}/bin/extend-phase-set
 
 %.bam.bai: %.sam
 	samtools view $< -b >$(@:.bai=)
-	samtools index $<
+	samtools index $(@:.bai=)
 
 %.fa.fai: %.fa
 	samtools faidx $<
