@@ -30,7 +30,7 @@ test.extend-phase-set: ${INSTALL_DIR}/bin/extend-phase-set
 	@echo "$@: all tests passed"
 
 %.bam.bai: %.sam
-	samtools view $< -b >$(@:.bai=)
+	samtools view -Sb $< >$(@:.bai=)
 	samtools index $(@:.bai=)
 
 %.fa.fai: %.fa
